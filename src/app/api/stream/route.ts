@@ -96,15 +96,55 @@ export async function GET(req: NextRequest) {
             data?.profilePictureUrl ||
             '';
 
+          // Detect if user is a subscriber
+          const isSubscriber = Boolean(
+            data?.userIdentity?.isSubscriberOfAnchor ||
+            data?.user?.isSubscribe ||
+            data?.isSubscriber ||
+            data?.user?.badgeList?.some((b: any) =>
+              b?.name?.toLowerCase()?.includes('sub') ||
+              b?.displayType === 1
+            )
+          );
+
           sendEvent('chat', {
             id: data?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
             uniqueId,
             nickname,
             comment,
             avatar,
+            isSubscriber,
             timestamp: Date.now(),
           });
         });
+
+        // Follow event
+        connection.on('follow', (data: any) => {
+          const uniqueId = data?.user?.displayId || data?.uniqueId || 'anon';
+          const nickname = data?.user?.nickname || data?.nickname || uniqueId;
+          const avatar = data?.user?.avatarThumb?.urlList?.[0] || '';
+
+          sendEvent('follow', {
+            uniqueId,
+            nickname,
+            avatar,
+            timestamp: Date.now(),
+          });
+        });
+
+        // Subscribe / Superfan event
+        const onSubEvent = (data: any) => {
+          const uniqueId = data?.user?.displayId || data?.uniqueId || 'anon';
+          const nickname = data?.user?.nickname || data?.nickname || uniqueId;
+
+          sendEvent('subscribe', {
+            uniqueId,
+            nickname,
+            timestamp: Date.now(),
+          });
+        };
+        connection.on('subscribe', onSubEvent);
+        connection.on('superFanJoin', onSubEvent);
 
         // Gift event
         connection.on('gift', (data: any) => {

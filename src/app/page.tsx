@@ -32,6 +32,7 @@ interface CommentItem {
   nickname: string;
   comment: string;
   avatar: string;
+  isSubscriber?: boolean;
   timestamp: number;
 }
 
@@ -41,6 +42,13 @@ interface GiftItem {
   giftName: string;
   diamonds: number;
   repeatCount: number;
+  timestamp: number;
+}
+
+interface FollowItem {
+  uniqueId: string;
+  nickname: string;
+  avatar?: string;
   timestamp: number;
 }
 
@@ -58,6 +66,7 @@ export default function Home() {
   // Comments feed
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [gifts, setGifts] = useState<GiftItem[]>([]);
+  const [recentFollowers, setRecentFollowers] = useState<FollowItem[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const commentsEndRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +81,9 @@ export default function Home() {
   const [ttsFilterShort, setTtsFilterShort] = useState(true);
   const [ttsFilterEmojis, setTtsFilterEmojis] = useState(true);
   const [ttsReadGifts, setTtsReadGifts] = useState(true);
+  const [ttsOnlySubscribers, setTtsOnlySubscribers] = useState(false);
+  const [ttsReadFollowers, setTtsReadFollowers] = useState(true);
+  const [ttsReadSubscriptions, setTtsReadSubscriptions] = useState(true);
   const [queueLength, setQueueLength] = useState(0);
 
   // Active Tab
@@ -90,11 +102,17 @@ export default function Home() {
   const ttsReadUsernameRef = useRef(ttsReadUsername);
   const ttsReadGiftsRef = useRef(ttsReadGifts);
   const ttsFilterShortRef = useRef(ttsFilterShort);
+  const ttsOnlySubscribersRef = useRef(ttsOnlySubscribers);
+  const ttsReadFollowersRef = useRef(ttsReadFollowers);
+  const ttsReadSubscriptionsRef = useRef(ttsReadSubscriptions);
 
   useEffect(() => { ttsFilterEmojisRef.current = ttsFilterEmojis; }, [ttsFilterEmojis]);
   useEffect(() => { ttsReadUsernameRef.current = ttsReadUsername; }, [ttsReadUsername]);
   useEffect(() => { ttsReadGiftsRef.current = ttsReadGifts; }, [ttsReadGifts]);
   useEffect(() => { ttsFilterShortRef.current = ttsFilterShort; }, [ttsFilterShort]);
+  useEffect(() => { ttsOnlySubscribersRef.current = ttsOnlySubscribers; }, [ttsOnlySubscribers]);
+  useEffect(() => { ttsReadFollowersRef.current = ttsReadFollowers; }, [ttsReadFollowers]);
+  useEffect(() => { ttsReadSubscriptionsRef.current = ttsReadSubscriptions; }, [ttsReadSubscriptions]);
 
   // Helper to remove emojis and decorative symbols
   const removeEmojis = (str: string): string => {
@@ -270,12 +288,57 @@ export default function Home() {
 
         if (!cleanComment) return;
 
+        // Mode: only read comments from subscribers
+        if (ttsOnlySubscribersRef.current && !data.isSubscriber) {
+          return;
+        }
+
         const toSpeak = ttsReadUsernameRef.current
           ? `${cleanName} dice: ${cleanComment}`
           : cleanComment;
         speakText(toSpeak);
       } catch (err) {
         console.error('Error parsing chat event', err);
+      }
+    });
+
+    // Follow event
+    es.addEventListener('follow', (e: MessageEvent) => {
+      try {
+        const data: FollowItem = JSON.parse(e.data);
+        setRecentFollowers((prev) => [data, ...prev].slice(0, 30));
+
+        if (ttsReadFollowersRef.current) {
+          let cleanFollower = data.nickname || data.uniqueId;
+          if (ttsFilterEmojisRef.current) {
+            cleanFollower = removeEmojis(cleanFollower).trim();
+          }
+          if (!cleanFollower) {
+            cleanFollower = data.uniqueId;
+          }
+          speakText(`¡Gracias por seguir, ${cleanFollower}!`);
+        }
+      } catch (err) {
+        console.error('Error parsing follow event', err);
+      }
+    });
+
+    // Subscribe / Superfan event
+    es.addEventListener('subscribe', (e: MessageEvent) => {
+      try {
+        const data: { uniqueId: string; nickname: string } = JSON.parse(e.data);
+        if (ttsReadSubscriptionsRef.current) {
+          let cleanSub = data.nickname || data.uniqueId;
+          if (ttsFilterEmojisRef.current) {
+            cleanSub = removeEmojis(cleanSub).trim();
+          }
+          if (!cleanSub) {
+            cleanSub = data.uniqueId;
+          }
+          speakText(`¡Nuevo suscriptor! ¡Bienvenido ${cleanSub}!`);
+        }
+      } catch (err) {
+        console.error('Error parsing subscribe event', err);
       }
     });
 
@@ -340,30 +403,44 @@ export default function Home() {
     }
   }, [comments, autoScroll]);
 
-  // Add simulated comment for testing
-  const addSimulatedComment = () => {
-    const mockNames = ['Carlos_Gamer', 'Maria_FreeFire', 'AlexPro99', 'Goku_FF', 'Valen_Live', 'Javier_P'];
-    const mockMessages = [
-      '¡Buena partida hermano!',
-      'Manda saludos a México por favor',
-      '¿Qué arma estás usando?',
-      'GG crack, juega con la escopeta',
-      'Saludos desde Colombia',
-      'Jajaja qué épica esa jugada',
-    ];
+  // Add simulated comment for testing (normal or subscriber)
+  const addSimulatedComment = (isSub: boolean = false) => {
+    const mockNames = isSub
+      ? ['👑_ElPatron_SUB', '⭐_FreeFireKing', '💎_LauraGamer', '🔥_MasterPro_SUB']
+      : ['Carlos_Gamer', 'Maria_FreeFire', 'AlexPro99', 'Goku_FF', 'Valen_Live', 'Javier_P'];
+    const mockMessages = isSub
+      ? [
+          '¡Prioridad de suscriptor crack!',
+          '¡Buena jugada desde la suscripción!',
+          '¡Saludos de tu suscriptor fiel!',
+          '¡Vamos con todo por el Booyah!',
+        ]
+      : [
+          '¡Buena partida hermano!',
+          'Manda saludos a México por favor',
+          '¿Qué arma estás usando?',
+          'GG crack, juega con la escopeta',
+          'Saludos desde Colombia',
+          'Jajaja qué épica esa jugada',
+        ];
     const randomUser = mockNames[Math.floor(Math.random() * mockNames.length)];
     const randomMsg = mockMessages[Math.floor(Math.random() * mockMessages.length)];
 
     const mockItem: CommentItem = {
       id: `${Date.now()}-${Math.random()}`,
-      uniqueId: randomUser.toLowerCase(),
+      uniqueId: randomUser.toLowerCase().replace(/[^a-z0-9_]/g, ''),
       nickname: randomUser,
       comment: randomMsg,
       avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${randomUser}`,
+      isSubscriber: isSub,
       timestamp: Date.now(),
     };
 
     setComments((prev) => [...prev, mockItem]);
+
+    // Check if only subscribers mode is on
+    if (ttsOnlySubscribersRef.current && !isSub) return;
+
     const cleanNick = ttsFilterEmojisRef.current
       ? removeEmojis(mockItem.nickname).trim() || mockItem.uniqueId
       : mockItem.nickname;
@@ -371,6 +448,25 @@ export default function Home() {
       ? `${cleanNick} dice: ${mockItem.comment}`
       : mockItem.comment;
     speakText(textToSpeak);
+  };
+
+  // Add simulated follower
+  const addSimulatedFollower = () => {
+    const mockUsers = ['Andres_Nuevo', 'Camila_FF', 'Daniel_Pro', 'Sofi_Gamer', 'Mateo_Live'];
+    const name = mockUsers[Math.floor(Math.random() * mockUsers.length)];
+    setRecentFollowers((prev) => [
+      {
+        uniqueId: name.toLowerCase(),
+        nickname: name,
+        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${name}`,
+        timestamp: Date.now(),
+      },
+      ...prev,
+    ].slice(0, 30));
+
+    if (ttsReadFollowersRef.current) {
+      speakText(`¡Gracias por seguir, ${name}!`);
+    }
   };
 
   const copyToClipboard = (text: string, key: string) => {
@@ -698,6 +794,38 @@ export default function Home() {
                 />
                 <span className="text-gray-300">Anunciar regalos (Gifts) recibidos</span>
               </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none bg-amber-500/5 p-1.5 rounded-lg border border-amber-500/20">
+                <input
+                  type="checkbox"
+                  checked={ttsOnlySubscribers}
+                  onChange={(e) => setTtsOnlySubscribers(e.target.checked)}
+                  className="rounded border-zinc-700 bg-zinc-800 text-amber-400 accent-amber-400"
+                />
+                <span className="text-gray-200 text-xs flex items-center gap-1">
+                  ⭐ <strong className="text-amber-300">Modo Solo Suscriptores</strong> (ignorar no-suscriptores)
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={ttsReadFollowers}
+                  onChange={(e) => setTtsReadFollowers(e.target.checked)}
+                  className="rounded border-zinc-700 bg-zinc-800 text-[#25F4EE] accent-[#25F4EE]"
+                />
+                <span className="text-gray-300">Agradecer nuevos seguidores ("¡Gracias por seguir!")</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={ttsReadSubscriptions}
+                  onChange={(e) => setTtsReadSubscriptions(e.target.checked)}
+                  className="rounded border-zinc-700 bg-zinc-800 text-amber-400 accent-amber-400"
+                />
+                <span className="text-gray-300">Anunciar nuevas suscripciones ("¡Nuevo suscriptor!")</span>
+              </label>
             </div>
 
             {/* Voice Test & Stop buttons */}
@@ -732,14 +860,32 @@ export default function Home() {
                   <span className="text-xs text-gray-500 font-mono">({comments.length})</span>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
-                    onClick={addSimulatedComment}
-                    className="px-2.5 py-1 text-xs rounded-lg bg-[#1d1d28] hover:bg-[#272737] text-gray-300 border border-[#2c2c3d] flex items-center gap-1 transition"
-                    title="Simular un comentario para probar TTS"
+                    onClick={() => addSimulatedComment(false)}
+                    className="px-2 py-1 text-[11px] rounded-lg bg-[#1d1d28] hover:bg-[#272737] text-gray-300 border border-[#2c2c3d] flex items-center gap-1 transition"
+                    title="Simular un comentario normal"
+                  >
+                    <MessageSquare className="w-3 h-3 text-[#25F4EE]" />
+                    Chat
+                  </button>
+
+                  <button
+                    onClick={() => addSimulatedComment(true)}
+                    className="px-2 py-1 text-[11px] rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 transition"
+                    title="Simular un comentario de suscriptor"
                   >
                     <Sparkles className="w-3 h-3 text-amber-400" />
-                    Simular
+                    Sub ⭐
+                  </button>
+
+                  <button
+                    onClick={addSimulatedFollower}
+                    className="px-2 py-1 text-[11px] rounded-lg bg-[#25F4EE]/10 hover:bg-[#25F4EE]/20 text-[#25F4EE] border border-[#25F4EE]/30 flex items-center gap-1 transition"
+                    title="Simular nuevo seguidor"
+                  >
+                    <Users className="w-3 h-3" />
+                    Follow
                   </button>
 
                   <button
@@ -773,25 +919,40 @@ export default function Home() {
                     <p className="text-xs text-gray-600 mt-1 max-w-sm">
                       Si el streamer está en vivo, los comentarios aparecerán aquí y serán leídos por voz al instante.
                     </p>
-                    <button
-                      onClick={addSimulatedComment}
-                      className="mt-4 px-4 py-2 rounded-xl bg-[#1e1e28] hover:bg-[#282836] border border-[#2f2f42] text-xs font-semibold text-[#25F4EE] flex items-center gap-1.5 transition"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Enviar comentario de prueba
-                    </button>
+                    <div className="flex gap-2 mt-4">
+                      <button
+                        onClick={() => addSimulatedComment(false)}
+                        className="px-3 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-[#282836] border border-[#2f2f42] text-xs font-semibold text-[#25F4EE] flex items-center gap-1.5 transition"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        Probar Chat
+                      </button>
+                      <button
+                        onClick={() => addSimulatedComment(true)}
+                        className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-xs font-semibold text-amber-300 flex items-center gap-1.5 transition"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        Probar Sub ⭐
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   comments.map((item) => (
                     <div
                       key={item.id}
-                      className="group flex items-start gap-3 p-2.5 rounded-xl bg-[#16161e]/60 hover:bg-[#1b1b24] border border-[#22222d] transition"
+                      className={`group flex items-start gap-3 p-2.5 rounded-xl border transition ${
+                        item.isSubscriber
+                          ? 'bg-[#1a1712]/70 hover:bg-[#221e17] border-amber-500/30'
+                          : 'bg-[#16161e]/60 hover:bg-[#1b1b24] border-[#22222d]'
+                      }`}
                     >
                       {item.avatar ? (
                         <img
                           src={item.avatar}
                           alt={item.nickname}
-                          className="w-8 h-8 rounded-full object-cover border border-[#2a2a38]"
+                          className={`w-8 h-8 rounded-full object-cover border ${
+                            item.isSubscriber ? 'border-amber-400 shadow-sm shadow-amber-400/20' : 'border-[#2a2a38]'
+                          }`}
                         />
                       ) : (
                         <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 flex items-center justify-center text-[10px] font-bold text-white">
@@ -801,9 +962,14 @@ export default function Home() {
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-xs text-[#25F4EE] truncate">
+                          <span className={`font-semibold text-xs truncate ${item.isSubscriber ? 'text-amber-300' : 'text-[#25F4EE]'}`}>
                             {item.nickname}
                           </span>
+                          {item.isSubscriber && (
+                            <span className="px-1.5 py-0.2 text-[9px] font-bold rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
+                              ⭐ SUB
+                            </span>
+                          )}
                           <span className="text-[11px] text-gray-500 truncate">
                             @{item.uniqueId}
                           </span>

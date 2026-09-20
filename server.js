@@ -42,15 +42,51 @@ function getOrCreateStream(username) {
     const nickname = data?.user?.nickname || data?.nickname || uniqueId;
     const avatar = data?.user?.avatarThumb?.urlList?.[0] || data?.profilePictureUrl || '';
 
+    const isSubscriber = Boolean(
+      data?.userIdentity?.isSubscriberOfAnchor ||
+      data?.user?.isSubscribe ||
+      data?.isSubscriber ||
+      data?.user?.badgeList?.some((b) =>
+        b?.name?.toLowerCase()?.includes('sub') ||
+        b?.displayType === 1
+      )
+    );
+
     broadcast('chat', {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       uniqueId,
       nickname,
       comment,
       avatar,
+      isSubscriber,
       timestamp: Date.now(),
     });
   });
+
+  connection.on('follow', (data) => {
+    const uniqueId = data?.user?.displayId || data?.uniqueId || 'anon';
+    const nickname = data?.user?.nickname || data?.nickname || uniqueId;
+    const avatar = data?.user?.avatarThumb?.urlList?.[0] || '';
+
+    broadcast('follow', {
+      uniqueId,
+      nickname,
+      avatar,
+      timestamp: Date.now(),
+    });
+  });
+
+  const onSub = (data) => {
+    const uniqueId = data?.user?.displayId || data?.uniqueId || 'anon';
+    const nickname = data?.user?.nickname || data?.nickname || uniqueId;
+    broadcast('subscribe', {
+      uniqueId,
+      nickname,
+      timestamp: Date.now(),
+    });
+  };
+  connection.on('subscribe', onSub);
+  connection.on('superFanJoin', onSub);
 
   connection.on('gift', (data) => {
     const giftName = data?.gift?.name || data?.giftName || 'Gift';

@@ -70,6 +70,7 @@ export default function Home() {
   const [ttsVolume, setTtsVolume] = useState<number>(1.0);
   const [ttsReadUsername, setTtsReadUsername] = useState(false);
   const [ttsFilterShort, setTtsFilterShort] = useState(true);
+  const [ttsFilterEmojis, setTtsFilterEmojis] = useState(true);
   const [ttsReadGifts, setTtsReadGifts] = useState(true);
   const [queueLength, setQueueLength] = useState(0);
 
@@ -83,6 +84,15 @@ export default function Home() {
   const speechQueueRef = useRef<string[]>([]);
   const isSpeakingRef = useRef<boolean>(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Helper to remove emojis
+  const removeEmojis = (str: string): string => {
+    return str
+      .replace(/\p{Extended_Pictographic}/gu, '')
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}]/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
 
   // Load browser voices
   useEffect(() => {
@@ -149,22 +159,30 @@ export default function Home() {
     (text: string) => {
       if (!ttsEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
 
-      // Filter short messages if enabled
-      if (ttsFilterShort && text.trim().length < 2) return;
+      let processed = text;
+
+      // Filter emojis completely
+      if (ttsFilterEmojis) {
+        processed = removeEmojis(processed);
+      }
+
+      // If empty or shorter than 2 chars, skip reading
+      if (!processed || processed.trim().length === 0) return;
+      if (ttsFilterShort && processed.trim().length < 2) return;
 
       // Limit queue to avoid accumulating 100+ messages
       if (speechQueueRef.current.length > 15) {
         speechQueueRef.current.splice(0, speechQueueRef.current.length - 10);
       }
 
-      speechQueueRef.current.push(text);
+      speechQueueRef.current.push(processed);
       setQueueLength(speechQueueRef.current.length);
 
       if (!isSpeakingRef.current) {
         processNextInQueue();
       }
     },
-    [ttsEnabled, ttsFilterShort, processNextInQueue]
+    [ttsEnabled, ttsFilterEmojis, ttsFilterShort, processNextInQueue]
   );
 
   const stopSpeaking = () => {
@@ -619,6 +637,16 @@ export default function Home() {
                   className="rounded border-zinc-700 bg-zinc-800 text-[#FE2C55] accent-[#FE2C55]"
                 />
                 <span className="text-gray-300">Omitir spam o mensajes de 1 letra</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={ttsFilterEmojis}
+                  onChange={(e) => setTtsFilterEmojis(e.target.checked)}
+                  className="rounded border-zinc-700 bg-zinc-800 text-[#FE2C55] accent-[#FE2C55]"
+                />
+                <span className="text-gray-300">Ignorar y no pronunciar emojis</span>
               </label>
 
               <label className="flex items-center gap-2 cursor-pointer select-none">

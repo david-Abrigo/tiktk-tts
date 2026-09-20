@@ -85,11 +85,24 @@ export default function Home() {
   const isSpeakingRef = useRef<boolean>(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  // Helper to remove emojis
+  // Settings refs to avoid reconnecting stream on settings toggle
+  const ttsFilterEmojisRef = useRef(ttsFilterEmojis);
+  const ttsReadUsernameRef = useRef(ttsReadUsername);
+  const ttsReadGiftsRef = useRef(ttsReadGifts);
+  const ttsFilterShortRef = useRef(ttsFilterShort);
+
+  useEffect(() => { ttsFilterEmojisRef.current = ttsFilterEmojis; }, [ttsFilterEmojis]);
+  useEffect(() => { ttsReadUsernameRef.current = ttsReadUsername; }, [ttsReadUsername]);
+  useEffect(() => { ttsReadGiftsRef.current = ttsReadGifts; }, [ttsReadGifts]);
+  useEffect(() => { ttsFilterShortRef.current = ttsFilterShort; }, [ttsFilterShort]);
+
+  // Helper to remove emojis and decorative symbols
   const removeEmojis = (str: string): string => {
+    if (!str) return '';
     return str
       .replace(/\p{Extended_Pictographic}/gu, '')
-      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}]/gu, '')
+      .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]/gu, '')
+      .replace(/[\u200D\uFE0F]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -241,10 +254,25 @@ export default function Home() {
           return next.length > 200 ? next.slice(-200) : next;
         });
 
-        // Trigger TTS
-        const toSpeak = ttsReadUsername
-          ? `${data.nickname} dice: ${data.comment}`
-          : data.comment;
+        // Trigger TTS with clean nickname without emojis
+        let cleanName = data.nickname || data.uniqueId;
+        if (ttsFilterEmojisRef.current) {
+          cleanName = removeEmojis(cleanName).trim();
+        }
+        if (!cleanName) {
+          cleanName = data.uniqueId;
+        }
+
+        let cleanComment = data.comment;
+        if (ttsFilterEmojisRef.current) {
+          cleanComment = removeEmojis(cleanComment).trim();
+        }
+
+        if (!cleanComment) return;
+
+        const toSpeak = ttsReadUsernameRef.current
+          ? `${cleanName} dice: ${cleanComment}`
+          : cleanComment;
         speakText(toSpeak);
       } catch (err) {
         console.error('Error parsing chat event', err);
@@ -255,8 +283,15 @@ export default function Home() {
       try {
         const data: GiftItem = JSON.parse(e.data);
         setGifts((prev) => [data, ...prev].slice(0, 50));
-        if (ttsReadGifts) {
-          speakText(`¡${data.nickname} envió ${data.repeatCount} ${data.giftName}!`);
+        if (ttsReadGiftsRef.current) {
+          let cleanGiftUser = data.nickname || data.uniqueId;
+          if (ttsFilterEmojisRef.current) {
+            cleanGiftUser = removeEmojis(cleanGiftUser).trim();
+          }
+          if (!cleanGiftUser) {
+            cleanGiftUser = data.uniqueId;
+          }
+          speakText(`¡${cleanGiftUser} envió ${data.repeatCount} ${data.giftName}!`);
         }
       } catch (err) {
         console.error('Error parsing gift event', err);
@@ -285,7 +320,7 @@ export default function Home() {
     es.onerror = () => {
       // EventSource automatically attempts to reconnect on error
     };
-  }, [speakText, ttsReadGifts, ttsReadUsername]);
+  }, [speakText]);
 
   // Initial connect on mount
   useEffect(() => {
@@ -329,7 +364,12 @@ export default function Home() {
     };
 
     setComments((prev) => [...prev, mockItem]);
-    const textToSpeak = ttsReadUsername ? `${mockItem.nickname} dice: ${mockItem.comment}` : mockItem.comment;
+    const cleanNick = ttsFilterEmojisRef.current
+      ? removeEmojis(mockItem.nickname).trim() || mockItem.uniqueId
+      : mockItem.nickname;
+    const textToSpeak = ttsReadUsernameRef.current
+      ? `${cleanNick} dice: ${mockItem.comment}`
+      : mockItem.comment;
     speakText(textToSpeak);
   };
 

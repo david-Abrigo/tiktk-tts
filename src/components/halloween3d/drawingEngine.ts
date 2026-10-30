@@ -1,8 +1,16 @@
 /**
  * Motor de Simulación de Dibujo Artístico en Tiempo Real con Temática Halloween
  * Procesa la foto de perfil, el nombre y el regalo enviado para generar un retrato
- * exclusivo según la jerarquía de diamantes, calculando en tiempo real las coordenadas
- * del pincel/pluma 3D que viaja sobre el lienzo.
+ * exclusivo según la jerarquía de diamantes.
+ * 
+ * Sincroniza al 100% las coordenadas del cabezal CNC del plotter 3D con el trazo
+ * visible sobre el papel:
+ * 1. Fase 1 (0% - 20%): Marco gótico exterior, runas y reliquias de Halloween.
+ * 2. Fase 2 (20% - 65%): DIBUJO CNC DEL AVATAR / FOTO DE PERFIL mediante pases
+ *    de grabado/trama vectorial con revelado progresivo línea por línea bajo la pluma.
+ * 3. Fase 3 (65% - 90%): ESCRITURA EN CALIGRAFÍA DEL NOMBRE Y @USUARIO letra por letra,
+ *    con el cabezal trazando físicamente cada carácter antes de plasmarlo con tinta espectral.
+ * 4. Fase 4 (90% - 100%): Sello Imperial de Halloween y Diamantes del regalo.
  */
 
 export interface DrawingUser {
@@ -79,8 +87,8 @@ export function getTierForDiamonds(diamonds: number): TierConfig {
 }
 
 export interface DrawingPoint {
-  x: number; // 0..1 normalizado
-  y: number; // 0..1 normalizado
+  x: number; // 0..1 normalizado en canvas
+  y: number; // 0..1 normalizado en canvas
   pressure: number;
 }
 
@@ -92,22 +100,54 @@ export interface StrokePath {
   isAccent?: boolean;
 }
 
+interface LetterLayout {
+  char: string;
+  x: number; // Coordenada X normalizada del centro de la letra
+  y: number; // Coordenada Y normalizada
+  width: number;
+  height: number;
+  strokes: DrawingPoint[];
+}
+
 /**
- * Pre-calcula los trazos vectoriales y fases para simular el dibujo artístico
+ * Sesión de Dibujo Halloween sincronizada con el Plotter CNC 3D
  */
 export class HalloweenDrawingSession {
   public user: DrawingUser;
   public tierConfig: TierConfig;
-  public loadedImage: HTMLImageElement | null = null;
   public canvas: HTMLCanvasElement;
   public ctx: CanvasRenderingContext2D;
-  private strokePaths: StrokePath[] = [];
+
+  // Offscreen canvas para pre-procesar y renderizar el avatar con filtro artístico
+  private avatarCanvas: HTMLCanvasElement;
+  private avatarCtx: CanvasRenderingContext2D;
+  private isAvatarReady: boolean = false;
+
+  // Trazos vectoriales de la Fase 1 (Marco exterior)
+  private frameStrokes: StrokePath[] = [];
+
+  // Pases de grabado CNC para el Avatar (Fase 2)
+  private avatarScanlines: { y: number; xStart: number; xEnd: number }[] = [];
+  private readonly avatarCenter = { x: 0.5, y: 0.38 };
+  private readonly avatarRadius = 0.19; // Radio normalizado en el canvas
+
+  // Trazos de la Cinta / Pergamino inferior
+  private ribbonStrokes: StrokePath[] = [];
+
+  // Disposición letra por letra del Nickname
+  private nicknameLetters: LetterLayout[] = [];
+  private uniqueIdLetters: LetterLayout[] = [];
+
+  // Sello final
+  private sealStrokes: StrokePath[] = [];
+
   public currentQuillPos = { quillX: 0.5, quillY: 0.5, isDrawing: false, pressure: 0 };
-  private imageError: boolean = false;
 
   constructor(user: DrawingUser) {
     this.user = user;
     this.tierConfig = getTierForDiamonds(user.diamonds);
+
+    // Canvas principal (1024x1024)
     this.canvas = document.createElement('canvas');
     this.canvas.width = 1024;
     this.canvas.height = 1024;
@@ -115,321 +155,657 @@ export class HalloweenDrawingSession {
     if (!ctx) throw new Error('Cannot get 2D context');
     this.ctx = ctx;
 
+    // Canvas offscreen del Avatar (512x512)
+    this.avatarCanvas = document.createElement('canvas');
+    this.avatarCanvas.width = 512;
+    this.avatarCanvas.height = 512;
+    const aCtx = this.avatarCanvas.getContext('2d');
+    if (!aCtx) throw new Error('Cannot get Avatar 2D context');
+    this.avatarCtx = aCtx;
+
+    // Generar fallback inmediato por si la imagen tarda o falla
+    this.generateFallbackAvatar();
+
+    // Inicializar carga de imagen remota del avatar
     this.initAvatar();
-    this.generateVectorStrokes();
+
+    // Precalcular todas las trayectorias de corte y dibujo
+    this.precomputeAllPaths();
+  }
+
+  /**
+   * Prepara el canvas offscreen del avatar con estilizado gótico
+   */
+  private prepareAvatarFilter(sourceImage: HTMLImageElement | HTMLCanvasElement) {
+    const w = this.avatarCanvas.width;
+    const h = this.avatarCanvas.height;
+    const ctx = this.avatarCtx;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Máscara circular con borde difuminado
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, w * 0.47, 0, Math.PI * 2);
+    ctx.clip();
+
+    // Fondo oscuro con gradiente espectral
+    const bgGrad = ctx.createRadialGradient(w / 2, h / 2, 40, w / 2, h / 2, w * 0.5);
+    bgGrad.addColorStop(0, '#1c1527');
+    bgGrad.addColorStop(1, '#090510');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Dibujar imagen centrada
+    ctx.drawImage(sourceImage, 0, 0, w, h);
+
+    // Tinte de Halloween según el Tier
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = this.tierConfig.accentColor;
+    ctx.globalAlpha = 0.45;
+    ctx.fillRect(0, 0, w, h);
+
+    // Trama de líneas de grabado artístico (efecto xilografía/grabador CNC)
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.25;
+    for (let y = 0; y < h; y += 4) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    // Viñeta oscura periférica
+    ctx.globalCompositeOperation = 'source-over';
+    const vignette = ctx.createRadialGradient(w / 2, h / 2, w * 0.28, w / 2, h / 2, w * 0.48);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(0.8, 'rgba(10,5,20,0.6)');
+    vignette.addColorStop(1, 'rgba(5,2,10,0.95)');
+    ctx.fillStyle = vignette;
+    ctx.globalAlpha = 1.0;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.restore();
+    this.isAvatarReady = true;
+  }
+
+  private generateFallbackAvatar() {
+    const fCanvas = document.createElement('canvas');
+    fCanvas.width = 512;
+    fCanvas.height = 512;
+    const fCtx = fCanvas.getContext('2d')!;
+
+    // Fondo cósmico tenebroso
+    const grad = fCtx.createRadialGradient(256, 256, 40, 256, 256, 256);
+    grad.addColorStop(0, '#2d1b4e');
+    grad.addColorStop(1, '#0b0615');
+    fCtx.fillStyle = grad;
+    fCtx.fillRect(0, 0, 512, 512);
+
+    // Silueta estilizada de Calavera Rey / Segador
+    fCtx.fillStyle = '#e2e8f0';
+    fCtx.beginPath();
+    fCtx.arc(256, 220, 125, 0, Math.PI * 2);
+    fCtx.fill();
+
+    // Mandíbula
+    fCtx.fillRect(205, 305, 102, 65);
+
+    // Cuencas oculares con brillo demoníaco
+    fCtx.fillStyle = '#0b0615';
+    fCtx.beginPath();
+    fCtx.ellipse(212, 220, 30, 40, -0.15, 0, Math.PI * 2);
+    fCtx.ellipse(300, 220, 30, 40, 0.15, 0, Math.PI * 2);
+    fCtx.fill();
+
+    // Brillo interior de los ojos según tier
+    fCtx.fillStyle = this.tierConfig.accentColor;
+    fCtx.beginPath();
+    fCtx.arc(215, 222, 10, 0, Math.PI * 2);
+    fCtx.arc(297, 222, 10, 0, Math.PI * 2);
+    fCtx.fill();
+
+    // Nariz triangular
+    fCtx.fillStyle = '#0b0615';
+    fCtx.beginPath();
+    fCtx.moveTo(256, 272);
+    fCtx.lineTo(246, 294);
+    fCtx.lineTo(266, 294);
+    fCtx.closePath();
+    fCtx.fill();
+
+    // Dientes de grabado
+    fCtx.strokeStyle = '#0b0615';
+    fCtx.lineWidth = 4;
+    for (let x = 222; x <= 290; x += 17) {
+      fCtx.beginPath();
+      fCtx.moveTo(x, 312);
+      fCtx.lineTo(x, 355);
+      fCtx.stroke();
+    }
+
+    this.prepareAvatarFilter(fCanvas);
   }
 
   private initAvatar() {
-    if (!this.user.avatar) {
-      this.generateFallbackAvatar();
-      return;
-    }
+    if (!this.user.avatar) return;
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      this.loadedImage = img;
+      this.prepareAvatarFilter(img);
     };
     img.onerror = () => {
-      this.imageError = true;
-      this.generateFallbackAvatar();
+      // Si falla CORS, el fallback vectorial ya está activo
     };
     img.src = this.user.avatar;
   }
 
-  private generateFallbackAvatar() {
-    // Generar un avatar vectorial de calavera / fantasma de alta calidad como fallback si falla CORS
-    const fallbackCanvas = document.createElement('canvas');
-    fallbackCanvas.width = 512;
-    fallbackCanvas.height = 512;
-    const fCtx = fallbackCanvas.getContext('2d')!;
-
-    // Fondo oscuro degradado
-    const grad = fCtx.createRadialGradient(256, 256, 50, 256, 256, 256);
-    grad.addColorStop(0, '#2d1b4e');
-    grad.addColorStop(1, '#0f071a');
-    fCtx.fillStyle = grad;
-    fCtx.fillRect(0, 0, 512, 512);
-
-    // Silueta de calavera estilizada
-    fCtx.fillStyle = '#e2e8f0';
-    fCtx.beginPath();
-    fCtx.arc(256, 220, 130, 0, Math.PI * 2);
-    fCtx.fill();
-
-    // Mandíbula
-    fCtx.fillRect(200, 310, 112, 70);
-
-    // Ojos negros huecos
-    fCtx.fillStyle = '#0f071a';
-    fCtx.beginPath();
-    fCtx.ellipse(210, 220, 32, 42, -0.15, 0, Math.PI * 2);
-    fCtx.ellipse(302, 220, 32, 42, 0.15, 0, Math.PI * 2);
-    fCtx.fill();
-
-    // Nariz triangular invertida
-    fCtx.beginPath();
-    fCtx.moveTo(256, 275);
-    fCtx.lineTo(245, 298);
-    fCtx.lineTo(267, 298);
-    fCtx.closePath();
-    fCtx.fill();
-
-    // Dientes
-    fCtx.strokeStyle = '#0f071a';
-    fCtx.lineWidth = 5;
-    for (let x = 220; x <= 292; x += 18) {
-      fCtx.beginPath();
-      fCtx.moveTo(x, 320);
-      fCtx.lineTo(x, 365);
-      fCtx.stroke();
-    }
-
-    const fallbackImg = new Image();
-    fallbackImg.src = fallbackCanvas.toDataURL();
-    this.loadedImage = fallbackImg;
-  }
-
   /**
-   * Genera los trazados vectoriales que la pluma 3D seguirá punto a punto
+   * Precalcula todas las trayectorias de dibujo para sincronización total con el plotter 3D
    */
-  private generateVectorStrokes() {
-    const strokes: StrokePath[] = [];
-    const tier = this.tierConfig.tier;
+  private precomputeAllPaths() {
     const primary = this.tierConfig.accentColor;
-    const secondary = this.tierConfig.secondaryColor;
+    const tier = this.tierConfig.tier;
 
-    // 1. MARCO EXTERIOR Y ADORNOS DE HALLOWEEN (Fase 1: 0% - 25%)
-    // Borde pergamino / retablo
+    // 1. MARCO GÓTICO EXTERIOR (Fase 1: 0% - 20%)
     const borderPoints: DrawingPoint[] = [];
-    const inset = 0.08;
-    const steps = 30;
+    const inset = 0.07;
+    const steps = 32;
+
     // Borde superior
     for (let i = 0; i <= steps; i++) {
       const x = inset + (1 - 2 * inset) * (i / steps);
-      const jitter = (Math.sin(i * 1.5) * 0.004);
-      borderPoints.push({ x, y: inset + jitter, pressure: 0.8 });
+      borderPoints.push({ x, y: inset + Math.sin(i * 1.5) * 0.003, pressure: 0.85 });
     }
     // Borde derecho
     for (let i = 0; i <= steps; i++) {
       const y = inset + (1 - 2 * inset) * (i / steps);
-      borderPoints.push({ x: 1 - inset + (Math.sin(i * 1.2) * 0.004), y, pressure: 0.8 });
+      borderPoints.push({ x: 1 - inset + Math.sin(i * 1.2) * 0.003, y, pressure: 0.85 });
     }
     // Borde inferior
     for (let i = steps; i >= 0; i--) {
       const x = inset + (1 - 2 * inset) * (i / steps);
-      borderPoints.push({ x, y: 1 - inset + (Math.cos(i * 1.4) * 0.004), pressure: 0.8 });
+      borderPoints.push({ x, y: 1 - inset + Math.cos(i * 1.4) * 0.003, pressure: 0.85 });
     }
     // Borde izquierdo
     for (let i = steps; i >= 0; i--) {
       const y = inset + (1 - 2 * inset) * (i / steps);
-      borderPoints.push({ x: inset + (Math.cos(i * 1.3) * 0.004), y, pressure: 0.8 });
+      borderPoints.push({ x: inset + Math.cos(i * 1.3) * 0.003, y, pressure: 0.85 });
     }
-    strokes.push({
+    this.frameStrokes.push({
       points: borderPoints,
       color: primary,
-      width: 6,
+      width: 5,
       glow: this.tierConfig.glowColor,
     });
 
-    // Adornos especiales según el nivel
-    if (tier === 'ghost' || tier === 'pumpkin' || tier === 'vampire' || tier === 'titan') {
-      // Telaraña en esquina superior izquierda
-      const webPoints: DrawingPoint[] = [
-        { x: 0.08, y: 0.08, pressure: 0.5 },
-        { x: 0.22, y: 0.08, pressure: 0.7 },
-        { x: 0.08, y: 0.08, pressure: 0.3 },
-        { x: 0.19, y: 0.15, pressure: 0.7 },
-        { x: 0.08, y: 0.08, pressure: 0.3 },
-        { x: 0.08, y: 0.22, pressure: 0.7 },
-      ];
-      strokes.push({ points: webPoints, color: '#94a3b8', width: 2 });
-    }
-
-    if (tier === 'pumpkin' || tier === 'titan') {
-      // Siluetas de calabazas en esquinas inferiores
-      const pumpkinLeft: DrawingPoint[] = [];
-      const cx = 0.15, cy = 0.85, r = 0.06;
-      for (let a = 0; a <= Math.PI * 2; a += 0.2) {
-        pumpkinLeft.push({
-          x: cx + Math.cos(a) * r * (1 + 0.15 * Math.sin(a * 4)),
-          y: cy + Math.sin(a) * r * 0.85,
-          pressure: 0.9,
-        });
-      }
-      strokes.push({ points: pumpkinLeft, color: '#f97316', width: 4, glow: 'rgba(249,115,22,0.9)' });
-    }
-
-    if (tier === 'vampire' || tier === 'titan') {
-      // Alas de murciélago en la parte superior
-      const batWings: DrawingPoint[] = [
-        { x: 0.5, y: 0.14, pressure: 1.0 },
-        { x: 0.42, y: 0.08, pressure: 0.9 },
-        { x: 0.35, y: 0.12, pressure: 0.8 },
-        { x: 0.28, y: 0.06, pressure: 0.9 },
-        { x: 0.32, y: 0.18, pressure: 0.7 },
-        { x: 0.5, y: 0.15, pressure: 0.9 },
-        { x: 0.68, y: 0.18, pressure: 0.7 },
-        { x: 0.72, y: 0.06, pressure: 0.9 },
-        { x: 0.65, y: 0.12, pressure: 0.8 },
-        { x: 0.58, y: 0.08, pressure: 0.9 },
-        { x: 0.5, y: 0.14, pressure: 1.0 },
-      ];
-      strokes.push({ points: batWings, color: '#e11d48', width: 5, glow: 'rgba(225,29,72,0.9)' });
-    }
-
+    // Reliquia superior de cabecera según el Tier
     if (tier === 'titan') {
       // Corona de Cuernos Titánicos
       const horns: DrawingPoint[] = [
-        { x: 0.4, y: 0.12, pressure: 1.0 },
-        { x: 0.3, y: 0.04, pressure: 0.9 },
-        { x: 0.22, y: 0.02, pressure: 1.0 },
-        { x: 0.26, y: 0.07, pressure: 0.8 },
-        { x: 0.38, y: 0.14, pressure: 0.7 },
-        { x: 0.5, y: 0.16, pressure: 0.9 },
-        { x: 0.62, y: 0.14, pressure: 0.7 },
-        { x: 0.74, y: 0.07, pressure: 0.8 },
-        { x: 0.78, y: 0.02, pressure: 1.0 },
-        { x: 0.7, y: 0.04, pressure: 0.9 },
-        { x: 0.6, y: 0.12, pressure: 1.0 },
+        { x: 0.40, y: 0.12, pressure: 1.0 },
+        { x: 0.32, y: 0.04, pressure: 0.9 },
+        { x: 0.24, y: 0.02, pressure: 1.0 },
+        { x: 0.28, y: 0.08, pressure: 0.8 },
+        { x: 0.38, y: 0.13, pressure: 0.7 },
+        { x: 0.50, y: 0.15, pressure: 0.9 },
+        { x: 0.62, y: 0.13, pressure: 0.7 },
+        { x: 0.72, y: 0.08, pressure: 0.8 },
+        { x: 0.76, y: 0.02, pressure: 1.0 },
+        { x: 0.68, y: 0.04, pressure: 0.9 },
+        { x: 0.60, y: 0.12, pressure: 1.0 },
       ];
-      strokes.push({ points: horns, color: '#fbbf24', width: 7, glow: 'rgba(251,191,36,0.95)' });
+      this.frameStrokes.push({ points: horns, color: '#fbbf24', width: 6, glow: 'rgba(251,191,36,0.9)' });
+    } else if (tier === 'vampire') {
+      // Alas de murciélago góticas
+      const batWings: DrawingPoint[] = [
+        { x: 0.50, y: 0.14, pressure: 0.9 },
+        { x: 0.42, y: 0.08, pressure: 0.8 },
+        { x: 0.34, y: 0.11, pressure: 0.8 },
+        { x: 0.26, y: 0.05, pressure: 0.9 },
+        { x: 0.30, y: 0.16, pressure: 0.7 },
+        { x: 0.50, y: 0.14, pressure: 0.9 },
+        { x: 0.70, y: 0.16, pressure: 0.7 },
+        { x: 0.74, y: 0.05, pressure: 0.9 },
+        { x: 0.66, y: 0.11, pressure: 0.8 },
+        { x: 0.58, y: 0.08, pressure: 0.8 },
+        { x: 0.50, y: 0.14, pressure: 0.9 },
+      ];
+      this.frameStrokes.push({ points: batWings, color: '#e11d48', width: 5, glow: 'rgba(225,29,72,0.9)' });
+    } else {
+      // Telarañas góticas en esquinas superiores
+      const webPoints: DrawingPoint[] = [
+        { x: 0.07, y: 0.07, pressure: 0.5 },
+        { x: 0.20, y: 0.07, pressure: 0.7 },
+        { x: 0.07, y: 0.07, pressure: 0.3 },
+        { x: 0.17, y: 0.14, pressure: 0.7 },
+        { x: 0.07, y: 0.07, pressure: 0.3 },
+        { x: 0.07, y: 0.20, pressure: 0.7 },
+      ];
+      this.frameStrokes.push({ points: webPoints, color: '#94a3b8', width: 2.5 });
     }
 
-    // 2. RETRATO CENTRAL / ÓVALO MÁGICO (Fase 2: 25% - 70%)
-    // Anillo exterior del avatar
-    const avatarRing: DrawingPoint[] = [];
-    const ringSteps = 45;
-    const ringCx = 0.5, ringCy = 0.44, ringR = 0.24;
-    for (let i = 0; i <= ringSteps; i++) {
-      const angle = (i / ringSteps) * Math.PI * 2;
-      avatarRing.push({
-        x: ringCx + Math.cos(angle) * ringR,
-        y: ringCy + Math.sin(angle) * ringR,
-        pressure: 0.85,
-      });
-    }
-    strokes.push({ points: avatarRing, color: primary, width: 6, glow: this.tierConfig.glowColor });
+    // 2. PASES DE CORTE Y TRAMADO DEL AVATAR (Fase 2: 20% - 65%)
+    // Generar 32 pases horizontales alternantes que barren el círculo del avatar
+    const cx = this.avatarCenter.x;
+    const cy = this.avatarCenter.y;
+    const r = this.avatarRadius;
+    const numScanlines = 32;
 
-    // Trazos simulados de dibujo interno del rostro / espirales de sombreado
-    for (let s = 0; s < 4; s++) {
-      const hatchPoints: DrawingPoint[] = [];
-      const startAngle = (s * Math.PI) / 2;
-      for (let t = 0; t <= 20; t++) {
-        const factor = t / 20;
-        const curR = ringR * 0.15 + factor * (ringR * 0.75);
-        const a = startAngle + factor * Math.PI * 1.5;
-        hatchPoints.push({
-          x: ringCx + Math.cos(a) * curR,
-          y: ringCy + Math.sin(a) * curR,
-          pressure: 0.4 + factor * 0.4,
-        });
+    this.avatarScanlines = [];
+    for (let k = 0; k < numScanlines; k++) {
+      const fracY = (k + 0.5) / numScanlines;
+      const y = (cy - r) + fracY * (2 * r);
+      const dy = y - cy;
+      const halfChord = Math.sqrt(Math.max(0, r * r - dy * dy)) * 0.97;
+
+      if (k % 2 === 0) {
+        this.avatarScanlines.push({ y, xStart: cx - halfChord, xEnd: cx + halfChord });
+      } else {
+        this.avatarScanlines.push({ y, xStart: cx + halfChord, xEnd: cx - halfChord });
       }
-      strokes.push({ points: hatchPoints, color: '#64748b', width: 2 });
     }
 
-    // 3. CALIGRAFÍA DEL NOMBRE Y CINTA DE HONOR (Fase 3: 70% - 95%)
-    // Cinta pergamino inferior
-    const ribbonPoints: DrawingPoint[] = [
-      { x: 0.18, y: 0.76, pressure: 0.7 },
-      { x: 0.5, y: 0.74, pressure: 0.9 },
-      { x: 0.82, y: 0.76, pressure: 0.7 },
-      { x: 0.86, y: 0.83, pressure: 0.8 },
-      { x: 0.8, y: 0.82, pressure: 0.7 },
-      { x: 0.5, y: 0.80, pressure: 0.9 },
-      { x: 0.2, y: 0.82, pressure: 0.7 },
-      { x: 0.14, y: 0.83, pressure: 0.8 },
-      { x: 0.18, y: 0.76, pressure: 0.7 },
+    // 3. CINTA PERGAMINO DECORATIVA PARA EL NOMBRE (Fase 3: 65% - 73%)
+    const ribbon: DrawingPoint[] = [
+      { x: 0.16, y: 0.74, pressure: 0.8 },
+      { x: 0.50, y: 0.725, pressure: 0.9 },
+      { x: 0.84, y: 0.74, pressure: 0.8 },
+      { x: 0.88, y: 0.81, pressure: 0.8 },
+      { x: 0.82, y: 0.795, pressure: 0.7 },
+      { x: 0.50, y: 0.78, pressure: 0.9 },
+      { x: 0.18, y: 0.795, pressure: 0.7 },
+      { x: 0.12, y: 0.81, pressure: 0.8 },
+      { x: 0.16, y: 0.74, pressure: 0.8 },
     ];
-    strokes.push({ points: ribbonPoints, color: primary, width: 4 });
+    this.ribbonStrokes.push({ points: ribbon, color: primary, width: 4, glow: this.tierConfig.glowColor });
 
-    // Trazos de las letras del nombre (letras simuladas para que la pluma baile sobre el texto)
-    const nameStr = this.user.nickname || this.user.uniqueId || 'Gamer';
-    const nameLetterCount = Math.min(nameStr.length, 14);
-    const startX = 0.26;
-    const letterSpan = (0.74 - startX) / Math.max(nameLetterCount, 1);
+    // 4. DISPOSICIÓN Y TRAZOS LETRA POR LETRA DEL NICKNAME (Fase 3: 73% - 85%)
+    const rawName = (this.user.nickname || this.user.uniqueId || 'Anon').trim();
+    const cleanName = rawName.length > 15 ? rawName.slice(0, 14) + '…' : rawName;
+    this.nicknameLetters = this.generateTextLayout(cleanName, 0.50, 0.765, 0.038, 0.050);
 
-    for (let l = 0; l < nameLetterCount; l++) {
-      const lx = startX + l * letterSpan + letterSpan * 0.5;
-      const letterStrokes: DrawingPoint[] = [
-        { x: lx - 0.012, y: 0.755, pressure: 0.8 },
-        { x: lx, y: 0.785, pressure: 0.9 },
-        { x: lx + 0.012, y: 0.755, pressure: 0.8 },
-        { x: lx - 0.008, y: 0.772, pressure: 0.7 },
-        { x: lx + 0.008, y: 0.772, pressure: 0.7 },
-      ];
-      strokes.push({ points: letterStrokes, color: '#f8fafc', width: 3 });
-    }
+    // 5. DISPOSICIÓN Y TRAZOS DE @UNIQUEID (Fase 3: 85% - 90%)
+    const rawId = `@${this.user.uniqueId || 'fan'}`.slice(0, 18);
+    this.uniqueIdLetters = this.generateTextLayout(rawId, 0.50, 0.825, 0.024, 0.032);
 
-    // 4. SELLO FINAL / AMULETO (95% - 100%)
+    // 6. SELLO IMPERIAL DE HALLOWEEN (Fase 4: 90% - 100%)
     const sealPoints: DrawingPoint[] = [];
-    for (let a = 0; a <= Math.PI * 2; a += 0.4) {
+    const sCx = 0.50, sCy = 0.925, sR = 0.038;
+    for (let a = 0; a <= Math.PI * 4; a += 0.25) {
+      const curR = sR * (0.8 + 0.2 * Math.sin(a * 5));
       sealPoints.push({
-        x: 0.5 + Math.cos(a) * 0.04,
-        y: 0.89 + Math.sin(a) * 0.04,
-        pressure: 1.0,
+        x: sCx + Math.cos(a) * curR,
+        y: sCy + Math.sin(a) * curR,
+        pressure: 0.95,
       });
     }
-    strokes.push({ points: sealPoints, color: primary, width: 5, glow: this.tierConfig.glowColor });
-
-    this.strokePaths = strokes;
+    this.sealStrokes.push({ points: sealPoints, color: primary, width: 4.5, glow: this.tierConfig.glowColor });
   }
 
   /**
-   * Renderiza el estado del dibujo para un progreso t de 0 a 1.
-   * Devuelve las coordenadas actuales de la pluma (en espacio normalizado 0..1).
+   * Genera la disposición centrada de caracteres con sus correspondientes trazos de pluma
+   */
+  private generateTextLayout(
+    text: string,
+    centerX: number,
+    centerY: number,
+    charWidth: number,
+    charHeight: number
+  ): LetterLayout[] {
+    const letters: LetterLayout[] = [];
+    const totalChars = Math.max(1, text.length);
+    const spacing = charWidth * 0.88;
+    const startX = centerX - ((totalChars - 1) * spacing) / 2;
+
+    for (let i = 0; i < totalChars; i++) {
+      const char = text[i];
+      const cx = startX + i * spacing;
+      const cy = centerY;
+
+      // Generar 3 trazos físicos que simulan la escritura de la letra
+      const strokes: DrawingPoint[] = [
+        { x: cx - charWidth * 0.35, y: cy + charHeight * 0.45, pressure: 0.9 }, // Abajo izquierda
+        { x: cx, y: cy - charHeight * 0.45, pressure: 1.0 },                   // Vértice superior
+        { x: cx + charWidth * 0.35, y: cy + charHeight * 0.45, pressure: 0.9 }, // Abajo derecha
+        { x: cx - charWidth * 0.20, y: cy, pressure: 0.7 },                    // Trazo medio
+        { x: cx + charWidth * 0.20, y: cy, pressure: 0.7 },
+      ];
+
+      letters.push({
+        char,
+        x: cx,
+        y: cy,
+        width: charWidth,
+        height: charHeight,
+        strokes,
+      });
+    }
+
+    return letters;
+  }
+
+  /**
+   * Renderiza el estado del dibujo para el progreso actual t (0.0 a 1.0).
+   * Devuelve las coordenadas exactas de la pluma (quillX, quillY) para mover
+   * el cabezal del plotter en 3D en tiempo real.
    */
   public renderProgress(t: number): { quillX: number; quillY: number; isDrawing: boolean } {
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
 
-    // Limpiar canvas
+    // 1. Limpiar lienzo
     ctx.clearRect(0, 0, w, h);
 
-    // Fondo estilo pergamino antiguo / lápida encantada
-    const bgGrad = ctx.createRadialGradient(w / 2, h / 2, 80, w / 2, h / 2, w * 0.7);
+    // Fondo de Pergamino Imperial Ancestral
+    const bgGrad = ctx.createRadialGradient(w / 2, h / 2, 70, w / 2, h / 2, w * 0.68);
     bgGrad.addColorStop(0, '#1c1527');
-    bgGrad.addColorStop(0.6, '#120d1c');
-    bgGrad.addColorStop(1, '#08050e');
+    bgGrad.addColorStop(0.6, '#110a1c');
+    bgGrad.addColorStop(1, '#07040d');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, w, h);
 
     // Textura sutil de pergamino envejecido
     ctx.save();
-    ctx.globalAlpha = 0.07;
-    ctx.fillStyle = '#ffeedd';
-    for (let i = 0; i < 40; i++) {
-      const rx = ((i * 137) % w);
-      const ry = ((i * 243) % h);
+    ctx.globalAlpha = 0.05;
+    ctx.fillStyle = '#fce7f3';
+    for (let i = 0; i < 35; i++) {
+      const rx = (i * 149) % w;
+      const ry = (i * 263) % h;
       ctx.beginPath();
-      ctx.arc(rx, ry, (i % 6) * 12 + 10, 0, Math.PI * 2);
+      ctx.arc(rx, ry, (i % 5) * 14 + 8, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
 
-    // TOTAL DE PUNTOS EN TODOS LOS TRAZOS
-    let totalPoints = 0;
-    for (const stroke of this.strokePaths) {
-      totalPoints += stroke.points.length;
+    let quillX = 0.5;
+    let quillY = 0.5;
+    let isDrawing = true;
+
+    // =========================================================================
+    // FASE 1: MARCO GÓTICO Y ADORNOS EXTERIORES (0.0 <= t <= 0.20)
+    // =========================================================================
+    const p1 = Math.min(1.0, t / 0.20);
+    this.renderStrokeList(this.frameStrokes, p1, (x, y) => {
+      quillX = x;
+      quillY = y;
+    });
+
+    // =========================================================================
+    // FASE 2: DIBUJO CNC DEL AVATAR / FOTO DE PERFIL (0.20 < t <= 0.65)
+    // =========================================================================
+    const cx = this.avatarCenter.x;
+    const cy = this.avatarCenter.y;
+    const r = this.avatarRadius;
+
+    if (t > 0.20) {
+      const pAvatar = Math.min(1.0, (t - 0.20) / 0.45); // 0 a 1 en la fase 2
+
+      // 2A. Medallón Circular Exterior
+      ctx.save();
+      ctx.strokeStyle = this.tierConfig.accentColor;
+      ctx.lineWidth = 6;
+      ctx.shadowColor = this.tierConfig.glowColor;
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      const ringAngle = Math.min(Math.PI * 2, pAvatar * Math.PI * 4); // El anillo se dibuja rápido
+      ctx.arc(cx * w, cy * h, r * w, 0, ringAngle);
+      ctx.stroke();
+
+      // Anillo decorativo interior fino
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#f8fafc';
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.arc(cx * w, cy * h, (r - 0.012) * w, 0, ringAngle);
+      ctx.stroke();
+      ctx.restore();
+
+      // 2B. Pases de Grabado del Avatar y Revelado Progresivo Línea por Línea
+      if (this.avatarScanlines.length > 0) {
+        const totalLines = this.avatarScanlines.length;
+        const currentLineProgress = pAvatar * totalLines;
+        const currentLineIdx = Math.min(totalLines - 1, Math.floor(currentLineProgress));
+        const lineFrac = currentLineProgress - Math.floor(currentLineProgress);
+
+        const activeLine = this.avatarScanlines[currentLineIdx];
+        const currentScanY = activeLine.y;
+
+        // Calcular posición actual del cabezal en el pase activo
+        quillX = activeLine.xStart + (activeLine.xEnd - activeLine.xStart) * lineFrac;
+        quillY = currentScanY + Math.sin(lineFrac * Math.PI * 16) * 0.002; // Micro-stippling
+        isDrawing = true;
+
+        // REVELADO DE LA FOTO: Solo se muestra hasta la línea de corte actual
+        if (this.isAvatarReady && this.avatarCanvas) {
+          ctx.save();
+          // Máscara 1: Solo dentro del círculo del medallón
+          ctx.beginPath();
+          ctx.arc(cx * w, cy * h, (r - 0.005) * w, 0, Math.PI * 2);
+          ctx.clip();
+
+          // Máscara 2: Revelado progresivo hasta la línea Y actual del cabezal
+          const revealY = pAvatar >= 0.98 ? (cy + r + 0.05) * h : (currentScanY + 0.006) * h;
+          ctx.beginPath();
+          ctx.rect(0, 0, w, revealY);
+          ctx.clip();
+
+          // Dibujar el avatar filtrado
+          const imgD = 2 * r * w;
+          ctx.drawImage(this.avatarCanvas, (cx - r) * w, (cy - r) * h, imgD, imgD);
+
+          ctx.restore();
+        }
+
+        // TRAZOS DE CORTE EN VIVO: Líneas de tinta y trama grabadas bajo la pluma
+        if (pAvatar < 0.98) {
+          ctx.save();
+          ctx.strokeStyle = this.tierConfig.accentColor;
+          ctx.lineWidth = 3;
+          ctx.shadowColor = this.tierConfig.glowColor;
+          ctx.shadowBlur = 10;
+          ctx.beginPath();
+          ctx.moveTo(activeLine.xStart * w, activeLine.y * h);
+          ctx.lineTo(quillX * w, quillY * h);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
     }
 
-    const currentPointsToDraw = Math.floor(totalPoints * Math.min(t, 1.0));
-    let pointsRendered = 0;
-    let lastX = 0.5;
-    let lastY = 0.5;
-    let isDrawingNow = t < 1.0;
+    // =========================================================================
+    // FASE 3: ESCRITURA EN CALIGRAFÍA DEL NOMBRE Y @USUARIO (0.65 < t <= 0.90)
+    // =========================================================================
+    if (t > 0.65) {
+      const p3 = Math.min(1.0, (t - 0.65) / 0.25);
 
-    // Dibujar trazos hasta el límite actual
-    for (const stroke of this.strokePaths) {
-      if (pointsRendered >= currentPointsToDraw) break;
+      // 3A. Dibujar la Cinta Pergamino
+      const pRibbon = Math.min(1.0, p3 / 0.25);
+      this.renderStrokeList(this.ribbonStrokes, pRibbon, (rx, ry) => {
+        if (p3 <= 0.25) {
+          quillX = rx;
+          quillY = ry;
+          isDrawing = true;
+        }
+      });
 
-      const availableInStroke = Math.min(
-        stroke.points.length,
-        currentPointsToDraw - pointsRendered
+      // 3B. Escritura Letra por Letra del Nickname (p3 de 0.25 a 0.70)
+      if (p3 > 0.25 && this.nicknameLetters.length > 0) {
+        const pName = Math.min(1.0, (p3 - 0.25) / 0.45);
+        const totalLetters = this.nicknameLetters.length;
+        const letterProgress = pName * totalLetters;
+        const currentLetterIdx = Math.min(totalLetters - 1, Math.floor(letterProgress));
+        const charFrac = letterProgress - Math.floor(letterProgress);
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 38px "Cinzel Decorative", "Cinzel", "Georgia", serif';
+
+        // 1. Renderizar todas las letras ya completadas con tinta permanente
+        for (let i = 0; i <= currentLetterIdx; i++) {
+          const l = this.nicknameLetters[i];
+          const isCurrent = i === currentLetterIdx;
+
+          if (!isCurrent || pName >= 0.99) {
+            // Letra completada
+            ctx.fillStyle = '#f8fafc';
+            ctx.shadowColor = this.tierConfig.glowColor;
+            ctx.shadowBlur = 16;
+            ctx.fillText(l.char, l.x * w, l.y * h);
+          } else {
+            // Letra siendo escrita actualmente por el cabezal CNC
+            const strokePoints = l.strokes;
+            const strokeIdx = Math.floor(charFrac * strokePoints.length);
+            const pt = strokePoints[Math.min(strokePoints.length - 1, strokeIdx)];
+
+            quillX = pt.x;
+            quillY = pt.y;
+            isDrawing = charFrac < 0.85; // Pen-lift entre letras
+
+            // Trazo dinámico de tinta fresca bajo la pluma
+            ctx.strokeStyle = this.tierConfig.accentColor;
+            ctx.lineWidth = 4;
+            ctx.shadowColor = this.tierConfig.glowColor;
+            ctx.shadowBlur = 12;
+            ctx.beginPath();
+            ctx.moveTo(strokePoints[0].x * w, strokePoints[0].y * h);
+            for (let s = 1; s <= strokeIdx; s++) {
+              ctx.lineTo(strokePoints[s].x * w, strokePoints[s].y * h);
+            }
+            ctx.stroke();
+
+            // Desvanecimiento suave de la letra al 50% de su trazo
+            if (charFrac > 0.45) {
+              ctx.fillStyle = 'rgba(248, 250, 252, 0.7)';
+              ctx.shadowColor = this.tierConfig.glowColor;
+              ctx.shadowBlur = 10;
+              ctx.fillText(l.char, l.x * w, l.y * h);
+            }
+          }
+        }
+        ctx.restore();
+      }
+
+      // 3C. Escritura de @UniqueId (p3 de 0.70 a 1.0)
+      if (p3 > 0.70 && this.uniqueIdLetters.length > 0) {
+        const pId = Math.min(1.0, (p3 - 0.70) / 0.30);
+        const totalIdChars = this.uniqueIdLetters.length;
+        const idProgress = pId * totalIdChars;
+        const currentIdIdx = Math.min(totalIdChars - 1, Math.floor(idProgress));
+        const idFrac = idProgress - Math.floor(idProgress);
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 22px "Courier New", monospace';
+        ctx.fillStyle = this.tierConfig.accentColor;
+        ctx.shadowColor = this.tierConfig.glowColor;
+        ctx.shadowBlur = 8;
+
+        for (let i = 0; i <= currentIdIdx; i++) {
+          const l = this.uniqueIdLetters[i];
+          const isCurrent = i === currentIdIdx;
+
+          if (!isCurrent || pId >= 0.99) {
+            ctx.fillText(l.char, l.x * w, l.y * h);
+          } else {
+            quillX = l.x + (Math.random() - 0.5) * 0.005;
+            quillY = l.y;
+            isDrawing = idFrac < 0.85;
+            ctx.fillText(l.char, l.x * w, l.y * h);
+          }
+        }
+        ctx.restore();
+      }
+    }
+
+    // =========================================================================
+    // FASE 4: SELLO IMPERIAL DE HALLOWEEN Y REGALO (0.90 < t <= 1.0)
+    // =========================================================================
+    if (t > 0.90) {
+      const p4 = Math.min(1.0, (t - 0.90) / 0.10);
+
+      // Línea de Regalo y Diamantes
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 24px system-ui, sans-serif';
+      ctx.fillStyle = '#fbbf24';
+      ctx.shadowColor = 'rgba(251, 191, 36, 0.8)';
+      ctx.shadowBlur = 12;
+      ctx.fillText(
+        `🎁 ${this.user.giftName} • ${this.user.diamonds} 💎`,
+        w * 0.50,
+        h * 0.875
       );
+      ctx.restore();
 
-      if (availableInStroke > 1) {
+      // Dibujar Sello Imperial
+      this.renderStrokeList(this.sealStrokes, p4, (sx, sy) => {
+        quillX = sx;
+        quillY = sy;
+        isDrawing = true;
+      });
+
+      // Título de Honor / Insignia Suprema al 100%
+      if (t >= 0.98) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 22px system-ui, sans-serif';
+        ctx.fillStyle = this.tierConfig.accentColor;
+        ctx.shadowColor = this.tierConfig.glowColor;
+        ctx.shadowBlur = 14;
+        ctx.fillText(this.tierConfig.titleBadge, w * 0.50, h * 0.975);
+        ctx.restore();
+
+        // Pluma levantada al finalizar
+        isDrawing = false;
+        quillX = 0.50;
+        quillY = 0.925;
+      }
+    }
+
+    this.currentQuillPos = {
+      quillX,
+      quillY,
+      isDrawing,
+      pressure: isDrawing ? 0.85 : 0.0,
+    };
+
+    return this.currentQuillPos;
+  }
+
+  /**
+   * Renderiza una lista de trazos vectoriales hasta una fracción progress (0..1)
+   */
+  private renderStrokeList(
+    strokes: StrokePath[],
+    progress: number,
+    onCurrentPos?: (x: number, y: number) => void
+  ) {
+    if (progress <= 0 || strokes.length === 0) return;
+
+    let totalPoints = 0;
+    for (const s of strokes) {
+      totalPoints += s.points.length;
+    }
+
+    const pointsToRender = Math.floor(totalPoints * Math.min(1.0, progress));
+    let renderedCount = 0;
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    for (const stroke of strokes) {
+      if (renderedCount >= pointsToRender) break;
+
+      const available = Math.min(stroke.points.length, pointsToRender - renderedCount);
+      if (available > 1) {
         ctx.save();
         ctx.strokeStyle = stroke.color;
         ctx.lineWidth = stroke.width;
@@ -445,109 +821,21 @@ export class HalloweenDrawingSession {
         const p0 = stroke.points[0];
         ctx.moveTo(p0.x * w, p0.y * h);
 
-        for (let i = 1; i < availableInStroke; i++) {
+        let lastPt = p0;
+        for (let i = 1; i < available; i++) {
           const pt = stroke.points[i];
           ctx.lineTo(pt.x * w, pt.y * h);
-          lastX = pt.x;
-          lastY = pt.y;
+          lastPt = pt;
         }
         ctx.stroke();
         ctx.restore();
+
+        if (onCurrentPos) {
+          onCurrentPos(lastPt.x, lastPt.y);
+        }
       }
 
-      pointsRendered += stroke.points.length;
+      renderedCount += stroke.points.length;
     }
-
-    // SI EL PROGRESO SUPERA EL 25%, COMENZAR A REVELAR LA FOTO DE PERFIL ESTILIZADA
-    if (t > 0.25 && this.loadedImage) {
-      const avatarProgress = Math.min(1.0, (t - 0.25) / 0.55); // 0 a 1 entre 25% y 80%
-
-      ctx.save();
-      // Máscara circular
-      const cx = w * 0.5;
-      const cy = h * 0.44;
-      const radius = w * 0.23;
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.clip();
-
-      // Opacidad gradual del boceto
-      ctx.globalAlpha = avatarProgress * 0.95;
-
-      // Dibujar imagen
-      const imgSize = radius * 2.2;
-      ctx.drawImage(this.loadedImage, cx - imgSize / 2, cy - imgSize / 2, imgSize, imgSize);
-
-      // Filtro de Halloween sobre la imagen (tinte misterioso según el tier)
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = this.tierConfig.accentColor;
-      ctx.globalAlpha = 0.35 * avatarProgress;
-      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-
-      // Efecto viñeta oscura interior
-      ctx.globalCompositeOperation = 'source-over';
-      const vignette = ctx.createRadialGradient(cx, cy, radius * 0.5, cx, cy, radius);
-      vignette.addColorStop(0, 'rgba(0,0,0,0)');
-      vignette.addColorStop(1, 'rgba(10,5,20,0.85)');
-      ctx.fillStyle = vignette;
-      ctx.globalAlpha = 1.0;
-      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-
-      ctx.restore();
-    }
-
-    // SI EL PROGRESO SUPERA EL 70%, RENDERIZAR EL TEXTO DEL NOMBRE EN CALIGRAFÍA GÓTICA
-    if (t > 0.70) {
-      const textProgress = Math.min(1.0, (t - 0.70) / 0.22);
-      ctx.save();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-
-      // Nombre del streamer/usuario
-      const name = this.user.nickname || this.user.uniqueId;
-      const visibleChars = Math.floor(name.length * textProgress);
-      const textToDraw = name.slice(0, visibleChars);
-
-      ctx.font = 'bold 36px "Cinzel", "Georgia", "Times New Roman", serif';
-      ctx.fillStyle = '#f8fafc';
-      ctx.shadowColor = this.tierConfig.glowColor;
-      ctx.shadowBlur = 18;
-      ctx.fillText(textToDraw, w * 0.5, h * 0.78);
-
-      // UniqueId (@usuario)
-      if (t > 0.85) {
-        ctx.font = 'italic 20px "Courier New", monospace';
-        ctx.fillStyle = this.tierConfig.accentColor;
-        ctx.shadowBlur = 8;
-        ctx.fillText(`@${this.user.uniqueId}`, w * 0.5, h * 0.825);
-      }
-
-      // Regalo y Diamantes
-      if (t > 0.90) {
-        ctx.font = 'bold 22px system-ui, sans-serif';
-        ctx.fillStyle = '#fbbf24';
-        ctx.shadowBlur = 12;
-        ctx.fillText(`🎁 ${this.user.giftName} • ${this.user.diamonds} 💎`, w * 0.5, h * 0.865);
-      }
-
-      // Insignia del Nivel
-      if (t > 0.95) {
-        ctx.font = 'bold 24px system-ui, sans-serif';
-        ctx.fillStyle = this.tierConfig.accentColor;
-        ctx.fillText(this.tierConfig.titleBadge, w * 0.5, h * 0.92);
-      }
-
-      ctx.restore();
-    }
-
-    this.currentQuillPos = {
-      quillX: lastX,
-      quillY: lastY,
-      isDrawing: isDrawingNow,
-      pressure: 0.8,
-    };
-
-    return this.currentQuillPos;
   }
 }

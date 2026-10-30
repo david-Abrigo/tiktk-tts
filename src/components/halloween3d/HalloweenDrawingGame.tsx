@@ -45,6 +45,16 @@ export const HalloweenDrawingGame: React.FC<HalloweenDrawingGameProps> = ({
     }
   }, [incomingGift]);
 
+  // Auto-activar demostración inicial al cargar para que el plotter cobre vida inmediatamente
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!isDrawingActiveRef.current && drawingQueue.length === 0 && !currentDrawing) {
+        handleSimulateGift('donut');
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, []);
+
   // Queue runner: starts next drawing when idle
   useEffect(() => {
     if (!isDrawingActiveRef.current && drawingQueue.length > 0) {

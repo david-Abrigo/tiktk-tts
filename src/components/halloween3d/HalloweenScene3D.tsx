@@ -35,6 +35,8 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<HalloweenDrawingSession | null>(null);
   const textureRef = useRef<THREE.CanvasTexture | null>(null);
+  const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const masterCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
 
@@ -64,8 +66,8 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
 
   // Dimensions of drawing sheet on the plotter bed
   const paperWidth = 2.0;
-  const paperHeight = 1.6;
-  const bedHeight = 1.03; // Surface height of Graphtec FCX2000 table
+  const paperHeight = 1.5;
+  const bedHeight = 1.854; // Exact top surface height of Graphtec FCX2000 vacuum bed (101.65cm * scaleFactor)
 
   // Initialize or update drawing session when currentDrawing changes
   useEffect(() => {
@@ -89,8 +91,10 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
       halloweenAudio.playSpookyChime(1.0);
     }
 
-    if (textureRef.current) {
-      textureRef.current.image = session.canvas;
+    if (masterCtxRef.current && textureRef.current) {
+      session.renderProgress(0);
+      masterCtxRef.current.clearRect(0, 0, 1024, 1024);
+      masterCtxRef.current.drawImage(session.canvas, 0, 0);
       textureRef.current.needsUpdate = true;
     }
   }, [currentDrawing]);
@@ -425,14 +429,39 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     );
 
     // 9. THE DRAWING CANVAS PAPER (Pliego de Papel en la Mesa de Corte)
-    const initialCanvas = document.createElement('canvas');
-    initialCanvas.width = 1024;
-    initialCanvas.height = 1024;
-    const initialCtx = initialCanvas.getContext('2d')!;
-    initialCtx.fillStyle = '#0c0816';
-    initialCtx.fillRect(0, 0, 1024, 1024);
+    const masterCanvas = document.createElement('canvas');
+    masterCanvas.width = 1024;
+    masterCanvas.height = 1024;
+    const masterCtx = masterCanvas.getContext('2d')!;
+    masterCanvasRef.current = masterCanvas;
+    masterCtxRef.current = masterCtx;
 
-    const canvasTexture = new THREE.CanvasTexture(initialCanvas);
+    // Pintar fondo de pergamino antiguo místico de espera
+    const initGrad = masterCtx.createRadialGradient(512, 512, 70, 512, 512, 700);
+    initGrad.addColorStop(0, '#1c1527');
+    initGrad.addColorStop(0.6, '#110a1c');
+    initGrad.addColorStop(1, '#07040d');
+    masterCtx.fillStyle = initGrad;
+    masterCtx.fillRect(0, 0, 1024, 1024);
+
+    masterCtx.strokeStyle = 'rgba(249, 115, 22, 0.4)';
+    masterCtx.lineWidth = 4;
+    masterCtx.strokeRect(70, 70, 1024 - 140, 1024 - 140);
+
+    masterCtx.textAlign = 'center';
+    masterCtx.textBaseline = 'middle';
+    masterCtx.font = 'bold 36px "Cinzel", "Georgia", serif';
+    masterCtx.fillStyle = '#f8fafc';
+    masterCtx.shadowColor = 'rgba(249, 115, 22, 0.8)';
+    masterCtx.shadowBlur = 18;
+    masterCtx.fillText('EL RETABLO ESPERA NUEVAS ALMAS', 512, 480);
+
+    masterCtx.font = '22px system-ui, sans-serif';
+    masterCtx.fillStyle = '#94a3b8';
+    masterCtx.shadowBlur = 0;
+    masterCtx.fillText('Envía un regalo en el Live para activar el Plotter CNC', 512, 540);
+
+    const canvasTexture = new THREE.CanvasTexture(masterCanvas);
     canvasTexture.minFilter = THREE.LinearFilter;
     canvasTexture.magFilter = THREE.LinearFilter;
     textureRef.current = canvasTexture;
@@ -443,10 +472,14 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
       map: canvasTexture,
       roughness: 0.45,
       metalness: 0.05,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
     });
     const paperMesh = new THREE.Mesh(paperGeo, paperMat);
     paperMesh.rotation.x = -Math.PI / 2;
-    paperMesh.position.set(0, bedHeight + 0.005, 0);
+    paperMesh.position.set(0, bedHeight + 0.003, 0);
     paperMesh.receiveShadow = true;
     plotterMainGroup.add(paperMesh);
 
@@ -617,11 +650,15 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
       });
 
       // UPDATE PLOTTER CNC GANTRY & CARRIAGE
-      if (sessionRef.current && textureRef.current) {
+      if (sessionRef.current && textureRef.current && masterCtxRef.current) {
         const session = sessionRef.current;
 
         // Render progressive canvas frame
         const { quillX, quillY, isDrawing } = session.renderProgress(drawingProgress);
+        
+        // Copy to master texture canvas
+        masterCtxRef.current.clearRect(0, 0, 1024, 1024);
+        masterCtxRef.current.drawImage(session.canvas, 0, 0);
         textureRef.current.needsUpdate = true;
 
         // Completion trigger check
@@ -716,27 +753,27 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
       if (cameraRef.current) {
         if (cameraMode === 'topdown') {
           // Bird's-Eye Top-Down view directly looking at the plotter bed
-          cameraRef.current.position.set(0, 3.4, 0.01);
+          cameraRef.current.position.set(0, 4.4, 0.01);
           cameraRef.current.lookAt(0, bedHeight, 0);
         } else if (cameraMode === 'stream') {
           // Front isometric stream view optimized for 9:16 or horizontal stream
-          cameraRef.current.position.set(0, 2.5, 2.6);
+          cameraRef.current.position.set(0, 3.2, 2.7);
           cameraRef.current.lookAt(0, bedHeight + 0.05, 0);
         } else if (cameraMode === 'cinematic') {
           // Dynamic camera gliding smoothly around the plotter machine
           const zoomFactor = currentDrawing ? (drawingProgress < 0.85 ? 0.9 : 1.1) : 1.0;
-          const targetDist = 3.6 * zoomFactor;
+          const targetDist = 3.8 * zoomFactor;
           const camX = Math.sin(elapsed * 0.2 + cameraRotY) * targetDist;
           const camZ = Math.cos(elapsed * 0.2 + cameraRotY) * targetDist;
-          const camY = 2.1 + Math.sin(elapsed * 0.35) * 0.25 + cameraRotX * 1.5;
+          const camY = bedHeight + 0.85 + Math.sin(elapsed * 0.35) * 0.25 + cameraRotX * 1.5;
 
           cameraRef.current.position.set(camX, camY, camZ);
           cameraRef.current.lookAt(0, bedHeight + 0.05, 0);
         } else {
           // Free Orbit Drag Mode
-          const dist = 3.8;
+          const dist = 4.0;
           const camX = Math.sin(cameraRotY) * Math.cos(cameraRotX) * dist;
-          const camY = 1.3 + Math.sin(cameraRotX) * dist * 1.2;
+          const camY = bedHeight + 0.6 + Math.sin(cameraRotX) * dist * 1.2;
           const camZ = Math.cos(cameraRotY) * Math.cos(cameraRotX) * dist;
           cameraRef.current.position.set(camX, camY, camZ);
           cameraRef.current.lookAt(0, bedHeight, 0);

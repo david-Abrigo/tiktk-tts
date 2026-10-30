@@ -34,53 +34,10 @@ class HalloweenAudioEngine {
   }
 
   /**
-   * Sonido continuo o pulsado de raspado de pluma / tiza sobre lienzo
+   * Silenciado: Eliminado el ruido blanco continuo durante el dibujo
    */
   public startQuillScratch() {
-    if (this.isMuted) return;
-    this.initCtx();
-    if (!this.ctx) return;
-
-    if (this.scratchGain) return; // Ya está sonando
-
-    try {
-      // Buffer de ruido blanco filtrado para simular fricción de pluma/pincel sobre papel rugoso
-      const bufferSize = this.ctx.sampleRate * 2;
-      const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-      const output = noiseBuffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-      }
-
-      const whiteNoise = this.ctx.createBufferSource();
-      whiteNoise.buffer = noiseBuffer;
-      whiteNoise.loop = true;
-
-      const bandpass = this.ctx.createBiquadFilter();
-      bandpass.type = 'bandpass';
-      bandpass.frequency.value = 1800;
-      bandpass.Q.value = 3.5;
-
-      const gain = this.ctx.createGain();
-      gain.gain.value = 0.08;
-
-      whiteNoise.connect(bandpass);
-      bandpass.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      whiteNoise.start();
-
-      this.scratchGain = gain;
-
-      // Micro modulaciones para que suene como trazos vivos
-      this.scratchTimer = setInterval(() => {
-        if (!this.scratchGain || !this.ctx) return;
-        const targetGain = 0.04 + Math.random() * 0.09;
-        this.scratchGain.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.05);
-      }, 80);
-    } catch (e) {
-      // Audio context might be restricted before user gesture
-    }
+    // Ruido blanco eliminado para mantener el audio limpio y sin estática
   }
 
   public stopQuillScratch() {
@@ -88,12 +45,7 @@ class HalloweenAudioEngine {
       clearInterval(this.scratchTimer);
       this.scratchTimer = null;
     }
-    if (this.scratchGain && this.ctx) {
-      try {
-        this.scratchGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
-      } catch {}
-      this.scratchGain = null;
-    }
+    this.scratchGain = null;
   }
 
   /**
@@ -127,7 +79,7 @@ class HalloweenAudioEngine {
   }
 
   /**
-   * Trueno y rayo de ultratumba para regalos grandes o legendarios
+   * Trueno y rayo de ultratumba (Sub-bass armónico limpio, sin ruido blanco)
    */
   public playThunder() {
     if (this.isMuted) return;
@@ -135,31 +87,21 @@ class HalloweenAudioEngine {
     if (!this.ctx) return;
 
     const now = this.ctx.currentTime;
-    const bufferSize = this.ctx.sampleRate * 2.5;
-    const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const output = noiseBuffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      output[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.8));
-    }
-
-    const whiteNoise = this.ctx.createBufferSource();
-    whiteNoise.buffer = noiseBuffer;
-
-    const lowpass = this.ctx.createBiquadFilter();
-    lowpass.type = 'lowpass';
-    lowpass.frequency.setValueAtTime(400, now);
-    lowpass.frequency.exponentialRampToValueAtTime(60, now + 2.0);
-
+    const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.5, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.4);
 
-    whiteNoise.connect(lowpass);
-    lowpass.connect(gain);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(80, now);
+    osc.frequency.exponentialRampToValueAtTime(24, now + 1.8);
+
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+
+    osc.connect(gain);
     gain.connect(this.ctx.destination);
 
-    whiteNoise.start(now);
-    whiteNoise.stop(now + 2.5);
+    osc.start(now);
+    osc.stop(now + 2.1);
   }
 
   /**

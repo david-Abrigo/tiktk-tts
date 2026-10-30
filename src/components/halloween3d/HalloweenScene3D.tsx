@@ -48,6 +48,12 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
   const penMeshRef = useRef<THREE.Group | null>(null);
   const laserCrosshairRef = useRef<THREE.Mesh | null>(null);
 
+  // Dedicated High-Visibility 3D Calligraphy Brush / Stylus Rig
+  const brushRigRef = useRef<THREE.Group | null>(null);
+  const brushTipLightRef = useRef<THREE.PointLight | null>(null);
+  const brushInkCoreMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  const prevBrushPosRef = useRef<{ x: number; z: number }>({ x: 0, z: 0 });
+
   // Actual GLB Animated Meshes Refs
   const glbGantryMeshesRef = useRef<THREE.Mesh[]>([]);
   const glbHeadMeshesRef = useRef<THREE.Mesh[]>([]);
@@ -523,35 +529,82 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     gantryGroup.add(carriageGroup);
     toolCarriageRef.current = carriageGroup;
 
-    const toolBody = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.16), new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.7 }));
-    toolBody.castShadow = true;
-    carriageGroup.add(toolBody);
+    // 10. DEDICATED HIGH-VISIBILITY 3D CALLIGRAPHY BRUSH & PLOTTER STYLUS
+    const brushRig = new THREE.Group();
+    brushRig.name = 'masterBrushRig';
+    brushRig.position.set(0, bedHeight + 0.08, 0);
+    plotterMainGroup.add(brushRig);
+    brushRigRef.current = brushRig;
+    penMeshRef.current = brushRig;
 
-    const penAssembly = new THREE.Group();
-    carriageGroup.add(penAssembly);
-    penMeshRef.current = penAssembly;
+    // A) Toolhead slider chassis block
+    const sliderBlock = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.10, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.35, metalness: 0.85 })
+    );
+    sliderBlock.position.y = 0.20;
+    sliderBlock.castShadow = true;
+    brushRig.add(sliderBlock);
 
-    const clampMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.14, 12), new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8, roughness: 0.2 }));
-    clampMesh.position.set(0, -0.06, 0.06);
-    penAssembly.add(clampMesh);
+    // B) Brass precision knurled collet & chuck
+    const chuck = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.030, 0.036, 0.09, 18),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.2, metalness: 0.9 })
+    );
+    chuck.position.y = 0.12;
+    chuck.castShadow = true;
+    brushRig.add(chuck);
 
-    const penNib = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.08, 12), new THREE.MeshBasicMaterial({ color: 0x22c55e }));
-    penNib.position.set(0, -0.14, 0.06);
-    penNib.rotation.x = Math.PI;
-    penAssembly.add(penNib);
+    // C) Obsidian Stylus Barrel with Golden Filigree Rings
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.020, 0.026, 0.15, 18),
+      new THREE.MeshStandardMaterial({ color: 0x090610, roughness: 0.15, metalness: 0.8 })
+    );
+    barrel.position.y = 0.02;
+    barrel.castShadow = true;
+    brushRig.add(barrel);
 
-    // Glow Light right at the pen tip
-    const penLight = new THREE.PointLight(0x22c55e, 2.0, 1.2);
-    penLight.position.set(0, -0.15, 0.06);
-    penAssembly.add(penLight);
-    penTipLightRef.current = penLight;
+    // D) Glowing Neon Ink Chamber (visible core)
+    const inkCoreMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+    const inkCore = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, 0.08, 14),
+      inkCoreMat
+    );
+    inkCore.position.y = 0.02;
+    brushRig.add(inkCore);
+    brushInkCoreMatRef.current = inkCoreMat;
 
-    // Red Laser Targeting Crosshair Beam on the paper (SIEMPRE ACTIVO)
-    const laserGeo = new THREE.RingGeometry(0.015, 0.022, 16);
-    const laserMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+    // E) Fine Pointed Artist Brush / Nib Tip
+    const nib = new THREE.Mesh(
+      new THREE.ConeGeometry(0.014, 0.075, 18),
+      new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.1, metalness: 0.95 })
+    );
+    nib.rotation.x = Math.PI; // Taper down towards paper
+    nib.position.y = -0.045; // Nib tip reaches -0.0825
+    nib.castShadow = true;
+    brushRig.add(nib);
+
+    // F) Micro Glowing Ink Contact Bead at tip
+    const bead = new THREE.Mesh(
+      new THREE.SphereGeometry(0.005, 10, 10),
+      inkCoreMat
+    );
+    bead.position.y = -0.080; // Exact paper contact level
+    brushRig.add(bead);
+
+    // G) Concentrated Spot/Point Light at paper contact point
+    const contactLight = new THREE.PointLight(0xf97316, 3.5, 1.2);
+    contactLight.position.y = -0.078;
+    brushRig.add(contactLight);
+    brushTipLightRef.current = contactLight;
+    penTipLightRef.current = contactLight;
+
+    // H) Red Laser Guide Crosshair on paper
+    const laserGeo = new THREE.RingGeometry(0.016, 0.024, 20);
+    const laserMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
     const laserCrosshair = new THREE.Mesh(laserGeo, laserMat);
     laserCrosshair.rotation.x = -Math.PI / 2;
-    laserCrosshair.position.set(0, bedHeight + 0.006, 0);
+    laserCrosshair.position.set(0, bedHeight + 0.005, 0);
     plotterMainGroup.add(laserCrosshair);
     laserCrosshairRef.current = laserCrosshair;
 
@@ -676,7 +729,42 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
         const targetX = (quillX - 0.5) * paperWidth;
         const targetZ = (quillY - 0.5) * paperHeight;
 
-        // A) ANIMATE ACTUAL PIECES OF THE GRAPHTEC GLB MODEL
+        // A) ANIMATE DEDICATED CALLIGRAPHY BRUSH / CNC STYLUS WITH TILT & PEN-LIFT
+        if (brushRigRef.current) {
+          const brush = brushRigRef.current;
+
+          // Servo tracking for X and Z
+          brush.position.x += (targetX - brush.position.x) * 0.32;
+          brush.position.z += (targetZ - brush.position.z) * 0.32;
+
+          // Vertical Pen-Lift:
+          // Down (touching paper): local bead (-0.08) touches bedHeight + 0.002 -> brush.y = bedHeight + 0.082
+          // Up (lifted 3.5cm above paper): brush.y = bedHeight + 0.117
+          const targetBrushY = isDrawing ? (bedHeight + 0.082) : (bedHeight + 0.117);
+          brush.position.y += (targetBrushY - brush.position.y) * 0.40;
+
+          // Organic Drag Tilt: Brush tilts in the direction of stroke drag
+          const velX = targetX - prevBrushPosRef.current.x;
+          const velZ = targetZ - prevBrushPosRef.current.z;
+          prevBrushPosRef.current.x = targetX;
+          prevBrushPosRef.current.z = targetZ;
+
+          const targetTiltZ = isDrawing ? Math.max(-0.25, Math.min(0.25, -velX * 5.0)) : 0;
+          const targetTiltX = isDrawing ? Math.max(-0.25, Math.min(0.25, velZ * 5.0)) : 0;
+          brush.rotation.z += (targetTiltZ - brush.rotation.z) * 0.22;
+          brush.rotation.x += (targetTiltX - brush.rotation.x) * 0.22;
+
+          // Ink glow & tier color update
+          if (brushInkCoreMatRef.current) {
+            brushInkCoreMatRef.current.color.setHex(session.tierConfig.particleColor);
+          }
+          if (brushTipLightRef.current) {
+            brushTipLightRef.current.color.setHex(session.tierConfig.particleColor);
+            brushTipLightRef.current.intensity = isDrawing ? 3.8 : 0.8;
+          }
+        }
+
+        // B) ANIMATE ACTUAL PIECES OF THE GRAPHTEC GLB MODEL
         if (isGlbLoadedRef.current) {
           const scale = glbScaleFactorRef.current || 0.01825;
           // In local coordinate space:
@@ -738,15 +826,27 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
           sparkIndex = (sparkIndex + 1) % sparkCount;
           sparkGeoRef.current.attributes.position.needsUpdate = true;
         }
-      } else if (isGlbLoadedRef.current) {
-        // Idle gentle park breathing
-        const idleX = Math.sin(elapsed * 0.6) * 15;
-        const idleY = Math.cos(elapsed * 0.8) * 12;
-        glbGantryMeshesRef.current.forEach((m) => { m.position.x += (idleX - m.position.x) * 0.05; });
-        glbHeadMeshesRef.current.forEach((m) => {
-          m.position.x += (idleX - m.position.x) * 0.05;
-          m.position.y += (idleY - m.position.y) * 0.05;
-        });
+      } else {
+        // Idle gentle park breathing for the Calligraphy Brush
+        if (brushRigRef.current) {
+          const idleX = Math.sin(elapsed * 0.5) * 0.25;
+          const idleZ = Math.cos(elapsed * 0.7) * 0.20;
+          brushRigRef.current.position.x += (idleX - brushRigRef.current.position.x) * 0.05;
+          brushRigRef.current.position.z += (idleZ - brushRigRef.current.position.z) * 0.05;
+          brushRigRef.current.position.y += ((bedHeight + 0.120) - brushRigRef.current.position.y) * 0.08;
+          brushRigRef.current.rotation.z += (0 - brushRigRef.current.rotation.z) * 0.1;
+          brushRigRef.current.rotation.x += (0 - brushRigRef.current.rotation.x) * 0.1;
+        }
+
+        if (isGlbLoadedRef.current) {
+          const idleX = Math.sin(elapsed * 0.6) * 15;
+          const idleY = Math.cos(elapsed * 0.8) * 12;
+          glbGantryMeshesRef.current.forEach((m) => { m.position.x += (idleX - m.position.x) * 0.05; });
+          glbHeadMeshesRef.current.forEach((m) => {
+            m.position.x += (idleX - m.position.x) * 0.05;
+            m.position.y += (idleY - m.position.y) * 0.05;
+          });
+        }
       }
 
       // CAMERA POSITIONING ACCORDING TO PLOTTER MODES

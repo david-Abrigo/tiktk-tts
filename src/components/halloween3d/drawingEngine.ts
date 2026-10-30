@@ -577,43 +577,98 @@ export class HalloweenDrawingSession {
 
         // Calcular posición actual del cabezal en el pase activo
         quillX = activeLine.xStart + (activeLine.xEnd - activeLine.xStart) * lineFrac;
-        quillY = currentScanY + Math.sin(lineFrac * Math.PI * 16) * 0.002; // Micro-stippling
+        quillY = currentScanY + Math.sin(lineFrac * Math.PI * 16) * 0.003; // Micro-stippling dinámico
         isDrawing = true;
 
-        // REVELADO DE LA FOTO: Solo se muestra hasta la línea de corte actual
+        // 1. REVELADO PROGRESIVO DE LA FOTO: se devela hasta la línea Y del cabezal
         if (this.isAvatarReady && this.avatarCanvas) {
           ctx.save();
-          // Máscara 1: Solo dentro del círculo del medallón
+          // Máscara 1: Dentro del medallón
           ctx.beginPath();
           ctx.arc(cx * w, cy * h, (r - 0.005) * w, 0, Math.PI * 2);
           ctx.clip();
 
-          // Máscara 2: Revelado progresivo hasta la línea Y actual del cabezal
-          const revealY = pAvatar >= 0.98 ? (cy + r + 0.05) * h : (currentScanY + 0.006) * h;
+          // Máscara 2: Revelado progresivo hasta la línea Y actual del pincel
+          const revealY = pAvatar >= 0.98 ? (cy + r + 0.05) * h : (currentScanY + 0.008) * h;
           ctx.beginPath();
           ctx.rect(0, 0, w, revealY);
           ctx.clip();
 
-          // Dibujar el avatar filtrado
+          // Dibujar el avatar con su estilizado gótico
           const imgD = 2 * r * w;
           ctx.drawImage(this.avatarCanvas, (cx - r) * w, (cy - r) * h, imgD, imgD);
-
           ctx.restore();
         }
 
-        // TRAZOS DE CORTE EN VIVO: Líneas de tinta y trama grabadas bajo la pluma
+        // 2. TRAZOS PROCEDURALES ACUMULATIVOS: DIBUJAR TODAS LAS LÍNEAS DE CORTE PREVIAS
+        ctx.save();
+        ctx.lineCap = 'round';
+
+        // A) Líneas ya completadas (quedan grabadas permanentemente en el papel)
+        for (let k = 0; k < currentLineIdx; k++) {
+          const l = this.avatarScanlines[k];
+          // Tinta oscura de grabado
+          ctx.strokeStyle = '#090510';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(l.xStart * w, l.y * h);
+          ctx.lineTo(l.xEnd * w, l.y * h);
+          ctx.stroke();
+
+          // Destello sutil de corte
+          if (k % 2 === 0) {
+            ctx.strokeStyle = this.tierConfig.accentColor;
+            ctx.globalAlpha = 0.4;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(l.xStart * w, l.y * h);
+            ctx.lineTo(l.xEnd * w, l.y * h);
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+          }
+        }
+
+        // B) Línea activa que el pincel está dibujando en este instante
         if (pAvatar < 0.98) {
-          ctx.save();
           ctx.strokeStyle = this.tierConfig.accentColor;
-          ctx.lineWidth = 3;
+          ctx.lineWidth = 3.5;
           ctx.shadowColor = this.tierConfig.glowColor;
-          ctx.shadowBlur = 10;
+          ctx.shadowBlur = 12;
           ctx.beginPath();
           ctx.moveTo(activeLine.xStart * w, activeLine.y * h);
           ctx.lineTo(quillX * w, quillY * h);
           ctx.stroke();
-          ctx.restore();
         }
+
+        // C) Trazos anatómicos del rostro (ojos, nariz, mandíbula) a medida que el pincel los cruza
+        if (currentScanY > cy - 0.05) {
+          // Ojos y cuencas espectrales
+          ctx.strokeStyle = this.tierConfig.accentColor;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc((cx - 0.06) * w, (cy - 0.02) * h, 14, 0, Math.PI * 2);
+          ctx.arc((cx + 0.06) * w, (cy - 0.02) * h, 14, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        if (currentScanY > cy + 0.02) {
+          // Nariz y pómulos
+          ctx.beginPath();
+          ctx.moveTo(cx * w, (cy - 0.01) * h);
+          ctx.lineTo((cx - 0.02) * w, (cy + 0.03) * h);
+          ctx.lineTo((cx + 0.02) * w, (cy + 0.03) * h);
+          ctx.closePath();
+          ctx.stroke();
+        }
+
+        if (currentScanY > cy + 0.08) {
+          // Arco de la sonrisa / mandíbula
+          ctx.beginPath();
+          ctx.arc(cx * w, (cy + 0.04) * h, 38, 0.2, Math.PI - 0.2);
+          ctx.stroke();
+        }
+
+        ctx.restore();
       }
     }
 

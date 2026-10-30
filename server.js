@@ -94,11 +94,24 @@ function getOrCreateStream(username) {
     const repeatCount = data?.repeatCount || 1;
     const uniqueId = data?.user?.displayId || data?.uniqueId || 'anon';
     const nickname = data?.user?.nickname || data?.nickname || uniqueId;
+    const avatar =
+      data?.user?.avatarThumb?.urlList?.[0] ||
+      data?.user?.avatarMedium?.urlList?.[0] ||
+      data?.user?.avatarLarge?.urlList?.[0] ||
+      data?.profilePictureUrl ||
+      '';
+    const giftPictureUrl =
+      data?.gift?.image?.urlList?.[0] ||
+      data?.giftPictureUrl ||
+      data?.gift?.icon?.urlList?.[0] ||
+      '';
 
     broadcast('gift', {
       uniqueId,
       nickname,
+      avatar,
       giftName,
+      giftPictureUrl,
       diamonds,
       repeatCount,
       timestamp: Date.now(),

@@ -24,7 +24,10 @@ import {
   ArrowDownCircle,
   RefreshCw,
   Sliders,
+  Flame,
 } from 'lucide-react';
+import { HalloweenDrawingGame } from '@/components/halloween3d/HalloweenDrawingGame';
+import { DrawingUser } from '@/components/halloween3d/drawingEngine';
 
 interface CommentItem {
   id: string;
@@ -39,7 +42,9 @@ interface CommentItem {
 interface GiftItem {
   uniqueId: string;
   nickname: string;
+  avatar?: string;
   giftName: string;
+  giftPictureUrl?: string;
   diamonds: number;
   repeatCount: number;
   timestamp: number;
@@ -87,7 +92,8 @@ export default function Home() {
   const [queueLength, setQueueLength] = useState(0);
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'comments' | 'tts' | 'api' | 'gifts'>('comments');
+  const [activeTab, setActiveTab] = useState<'halloween3d' | 'comments' | 'tts' | 'api' | 'gifts'>('halloween3d');
+  const [latestGiftForDrawing, setLatestGiftForDrawing] = useState<DrawingUser | null>(null);
 
   // Copied helper
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -346,6 +352,20 @@ export default function Home() {
       try {
         const data: GiftItem = JSON.parse(e.data);
         setGifts((prev) => [data, ...prev].slice(0, 50));
+
+        // Enviar al motor del Retablo 3D de Halloween
+        const drawUser: DrawingUser = {
+          uniqueId: data.uniqueId || 'anon',
+          nickname: data.nickname || data.uniqueId || 'Anon',
+          avatar: data.avatar || '',
+          giftName: data.giftName || 'Regalo',
+          giftPictureUrl: data.giftPictureUrl,
+          diamonds: data.diamonds || 1,
+          repeatCount: data.repeatCount || 1,
+          timestamp: data.timestamp || Date.now(),
+        };
+        setLatestGiftForDrawing(drawUser);
+
         if (ttsReadGiftsRef.current) {
           let cleanGiftUser = data.nickname || data.uniqueId;
           if (ttsFilterEmojisRef.current) {
@@ -529,8 +549,21 @@ export default function Home() {
             </button>
           </form>
 
-          {/* Connection Status Pill */}
+          {/* Connection Status Pill & OBS Link */}
           <div className="flex items-center gap-2">
+            <a
+              href={`/halloween?username=${encodeURIComponent(username)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-500/30 text-xs font-semibold transition shadow-sm shadow-orange-600/20"
+              title="Abrir Pantalla Completa 3D para OBS Studio"
+            >
+              <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500 animate-pulse" />
+              <span className="hidden sm:inline">OBS Studio 3D</span>
+              <span className="sm:hidden">OBS 3D</span>
+              <ExternalLink className="w-3 h-3 ml-0.5 opacity-70" />
+            </a>
+
             <div
               className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border ${
                 connectionStatus === 'connected'
@@ -634,6 +667,17 @@ export default function Home() {
           {/* Quick Action Tabs */}
           <div className="flex rounded-xl bg-[#121216] p-1 border border-[#23232c] gap-1">
             <button
+              onClick={() => setActiveTab('halloween3d')}
+              className={`flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                activeTab === 'halloween3d'
+                  ? 'bg-gradient-to-r from-orange-600 to-purple-600 text-white shadow-md shadow-orange-600/30 border border-orange-400/40'
+                  : 'text-orange-400 hover:text-orange-300 bg-orange-950/20 border border-orange-500/20'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+              Retablo 3D
+            </button>
+            <button
               onClick={() => setActiveTab('comments')}
               className={`flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'comments'
@@ -645,6 +689,17 @@ export default function Home() {
               Chat ({comments.length})
             </button>
             <button
+              onClick={() => setActiveTab('gifts')}
+              className={`flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                activeTab === 'gifts'
+                  ? 'bg-[#1e1e27] text-amber-400 shadow-sm border border-[#2c2c3a]'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              <Gift className="w-3.5 h-3.5 text-amber-400" />
+              Regalos ({gifts.length})
+            </button>
+            <button
               onClick={() => setActiveTab('tts')}
               className={`flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
                 activeTab === 'tts'
@@ -653,7 +708,7 @@ export default function Home() {
               }`}
             >
               <Sliders className="w-3.5 h-3.5" />
-              Ajustes TTS
+              TTS
             </button>
             <button
               onClick={() => setActiveTab('api')}
@@ -664,7 +719,7 @@ export default function Home() {
               }`}
             >
               <Smartphone className="w-3.5 h-3.5" />
-              API Móvil
+              API
             </button>
           </div>
 
@@ -850,6 +905,17 @@ export default function Home() {
 
         {/* Right Column: Live Comments Feed & API Integration (8 cols) */}
         <div className="lg:col-span-8">
+          {/* TAB: 3D HALLOWEEN DRAWING GAME */}
+          {activeTab === 'halloween3d' && (
+            <div className="bg-[#121216] border border-[#23232c] rounded-2xl h-[750px] shadow-2xl overflow-hidden relative">
+              <HalloweenDrawingGame
+                incomingGift={latestGiftForDrawing}
+                isStreamConnected={connectionStatus === 'connected'}
+                streamUsername={username}
+              />
+            </div>
+          )}
+
           {activeTab === 'comments' && (
             <div className="bg-[#121216] border border-[#23232c] rounded-2xl flex flex-col h-[750px] shadow-xl overflow-hidden">
               {/* Header Feed Bar */}
@@ -1147,6 +1213,92 @@ void listenLive() async {
 {`curl -N "${apiStreamUrl}"`}
                   </pre>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'gifts' && (
+            <div className="bg-[#121216] border border-[#23232c] rounded-2xl flex flex-col h-[750px] shadow-xl overflow-hidden">
+              <div className="p-3.5 border-b border-[#23232c] flex items-center justify-between bg-[#14141a]">
+                <div className="flex items-center gap-2">
+                  <Gift className="w-4 h-4 text-amber-400" />
+                  <span className="font-semibold text-sm text-gray-200">Regalos Recibidos en Vivo</span>
+                  <span className="text-xs text-gray-500 font-mono">({gifts.length})</span>
+                </div>
+                <button
+                  onClick={() => {
+                    const mockGifts = [
+                      { name: 'Rosa', diamonds: 1 },
+                      { name: 'Dona', diamonds: 30 },
+                      { name: 'Cisne', diamonds: 199 },
+                      { name: 'León', diamonds: 1000 },
+                    ];
+                    const selected = mockGifts[Math.floor(Math.random() * mockGifts.length)];
+                    const user = 'Tester_' + Math.floor(Math.random() * 900 + 100);
+                    const newGift: GiftItem = {
+                      uniqueId: user.toLowerCase(),
+                      nickname: user,
+                      avatar: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200`,
+                      giftName: selected.name,
+                      diamonds: selected.diamonds,
+                      repeatCount: 1,
+                      timestamp: Date.now(),
+                    };
+                    setGifts((prev) => [newGift, ...prev]);
+                    setLatestGiftForDrawing(newGift);
+                  }}
+                  className="px-2.5 py-1 text-xs rounded-lg bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-500/30 flex items-center gap-1 transition"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Simular Regalo
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {gifts.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center p-6 text-gray-500">
+                    <Gift className="w-12 h-12 mb-3 text-amber-400/50 animate-bounce" />
+                    <p className="font-medium text-gray-300">Esperando regalos en el directo...</p>
+                    <p className="text-xs text-gray-500 mt-1 max-w-sm">
+                      Cada regalo recibido activará automáticamente el Retablo 3D para transfigurar la foto y el nombre del usuario.
+                    </p>
+                  </div>
+                ) : (
+                  gifts.map((g, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 transition-all"
+                    >
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={g.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200'}
+                          alt={g.nickname}
+                          className="w-11 h-11 rounded-xl object-cover border border-zinc-700"
+                        />
+                        <div>
+                          <p className="text-sm font-bold text-white">{g.nickname}</p>
+                          <p className="text-xs text-zinc-400">@{g.uniqueId}</p>
+                          <div className="flex items-center gap-1.5 mt-0.5 text-xs text-amber-400 font-semibold">
+                            <span>🎁 {g.giftName} (x{g.repeatCount})</span>
+                            <span>•</span>
+                            <span className="text-orange-400">{g.diamonds} 💎</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setLatestGiftForDrawing(g);
+                          setActiveTab('halloween3d');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition shadow-md shadow-orange-600/30 flex items-center gap-1"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Dibujar en 3D
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}

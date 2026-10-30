@@ -35,3 +35,7 @@ next-env.d.ts
 
 # local prompts
 PROMPT_ANDROID_APP.md
+
+# Root model copy (served from public/models)
+/graphtec_fcx2000.glb
+.playwright-mcp/

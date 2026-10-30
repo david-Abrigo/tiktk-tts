@@ -28,8 +28,8 @@ interface HalloweenGameOverlayProps {
   drawingProgress: number;
   drawingQueue: DrawingUser[];
   history: DrawingUser[];
-  cameraMode: 'cinematic' | 'stream' | 'free';
-  setCameraMode: (mode: 'cinematic' | 'stream' | 'free') => void;
+  cameraMode: 'cinematic' | 'stream' | 'topdown' | 'free';
+  setCameraMode: (mode: 'cinematic' | 'stream' | 'topdown' | 'free') => void;
   drawSpeedSeconds: number;
   setDrawSpeedSeconds: (sec: number) => void;
   onSimulateGift: (preset: 'rose' | 'donut' | 'swan' | 'lion' | 'custom', customData?: Partial<DrawingUser>) => void;
@@ -114,7 +114,7 @@ export const HalloweenGameOverlay: React.FC<HalloweenGameOverlayProps> = ({
 
           <div className="flex items-center gap-1.5 text-xs font-medium text-orange-400">
             <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500 animate-pulse" />
-            <span>Retablo 3D de Halloween</span>
+            <span>Plotter CNC Graphtec FCX2000</span>
           </div>
         </div>
 
@@ -124,25 +124,37 @@ export const HalloweenGameOverlay: React.FC<HalloweenGameOverlayProps> = ({
           <div className="flex items-center bg-zinc-900/90 rounded-xl p-1 border border-zinc-800">
             <button
               onClick={() => setCameraMode('cinematic')}
-              className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all ${
+              className={`px-2 py-1 text-xs rounded-lg font-medium transition-all ${
                 cameraMode === 'cinematic' ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30' : 'text-zinc-400 hover:text-white'
               }`}
+              title="Cámara orbital cinemática"
             >
               Cinemática
             </button>
             <button
+              onClick={() => setCameraMode('topdown')}
+              className={`px-2 py-1 text-xs rounded-lg font-medium transition-all ${
+                cameraMode === 'topdown' ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30' : 'text-zinc-400 hover:text-white'
+              }`}
+              title="Cámara cenital: vista directa desde arriba del Plotter"
+            >
+              Cenital (Top)
+            </button>
+            <button
               onClick={() => setCameraMode('stream')}
-              className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all ${
+              className={`px-2 py-1 text-xs rounded-lg font-medium transition-all ${
                 cameraMode === 'stream' ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30' : 'text-zinc-400 hover:text-white'
               }`}
+              title="Cámara frontal optimizada para Stream y OBS"
             >
               Stream (Frontal)
             </button>
             <button
               onClick={() => setCameraMode('free')}
-              className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all ${
+              className={`px-2 py-1 text-xs rounded-lg font-medium transition-all ${
                 cameraMode === 'free' ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30' : 'text-zinc-400 hover:text-white'
               }`}
+              title="Control libre 3D con el ratón"
             >
               3D Libre
             </button>

@@ -28,7 +28,7 @@ export const HalloweenDrawingGame: React.FC<HalloweenDrawingGameProps> = ({
   const [drawingProgress, setDrawingProgress] = useState<number>(0);
   const [drawingQueue, setDrawingQueue] = useState<DrawingUser[]>([]);
   const [history, setHistory] = useState<DrawingUser[]>([]);
-  const [cameraMode, setCameraMode] = useState<'cinematic' | 'stream' | 'free'>('cinematic');
+  const [cameraMode, setCameraMode] = useState<'cinematic' | 'stream' | 'topdown' | 'free'>('cinematic');
   const [drawSpeedSeconds, setDrawSpeedSeconds] = useState<number>(8); // default 8s
   const [particleBurstCount, setParticleBurstCount] = useState<number>(0);
 

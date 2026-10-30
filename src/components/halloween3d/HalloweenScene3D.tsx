@@ -15,6 +15,16 @@ interface HalloweenScene3DProps {
   particleBurstCount: number;
 }
 
+// Mesh names in graphtec_fcx2000.glb for moving parts
+const GANTRY_NAMES = new Set(['Object_2', 'Object_12', 'Object_23']);
+const HEAD_NAMES = new Set([
+  'Object_13', 'Object_14', 'Object_15', 'Object_16', 'Object_24',
+  'Object_35', 'Object_36', 'Object_38', 'Object_39', 'Object_40',
+  'Object_41', 'Object_42', 'Object_43', 'Object_44', 'Object_45',
+  'Object_46', 'Object_47'
+]);
+const PEN_NAMES = new Set(['Object_48', 'Object_49', 'Object_50', 'Object_51']);
+
 export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
   currentDrawing,
   drawingProgress,
@@ -28,13 +38,20 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
 
-  // Plotter Machine Refs
+  // Plotter Machine Procedural Refs
   const plotterGroupRef = useRef<THREE.Group | null>(null);
   const gantryBeamRef = useRef<THREE.Group | null>(null);
   const toolCarriageRef = useRef<THREE.Group | null>(null);
   const penTipLightRef = useRef<THREE.PointLight | null>(null);
   const penMeshRef = useRef<THREE.Group | null>(null);
   const laserCrosshairRef = useRef<THREE.Mesh | null>(null);
+
+  // Actual GLB Animated Meshes Refs
+  const glbGantryMeshesRef = useRef<THREE.Mesh[]>([]);
+  const glbHeadMeshesRef = useRef<THREE.Mesh[]>([]);
+  const glbPenMeshesRef = useRef<THREE.Mesh[]>([]);
+  const glbScaleFactorRef = useRef<number>(0.01825);
+  const isGlbLoadedRef = useRef<boolean>(false);
 
   const pumpkinsLightRef = useRef<THREE.PointLight[]>([]);
   const batsRef = useRef<{ mesh: THREE.Group; speed: number; radius: number; angle: number; y: number }[]>([]);
@@ -62,7 +79,7 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     sessionRef.current = session;
     hasTriggeredFanfareRef.current = false;
 
-    // Sonidos temáticos limpios
+    // Sonidos temáticos limpios (sin ruido blanco)
     if (currentDrawing.diamonds >= 500) {
       halloweenAudio.playThunder();
       setTimeout(() => halloweenAudio.playWitchLaugh(), 400);
@@ -135,7 +152,7 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     moonLight.shadow.bias = -0.001;
     scene.add(moonLight);
 
-    // Machine Work Overhead SpotLight (ilumina la mesa del plotter con luz blanca cálida de precisión)
+    // Machine Work Overhead SpotLight (ilumina la mesa del plotter con luz blanca de precisión)
     const plotterSpot = new THREE.SpotLight(0xfff5e6, 3.5, 9, Math.PI / 4, 0.35, 1.0);
     plotterSpot.position.set(0, 4.0, 0.3);
     plotterSpot.target.position.set(0, bedHeight, 0);
@@ -281,8 +298,7 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     scene.add(plotterMainGroup);
     plotterGroupRef.current = plotterMainGroup;
 
-    // A) Procedural Plotter Base (Graphtec Stand & Bed structure)
-    // Runs immediately so there is zero delay while the 31MB GLB finishes downloading
+    // A) Procedural Plotter Base (Graphtec Stand & Bed structure - fallback inmediato)
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x181820, roughness: 0.5, metalness: 0.6 });
     const bedMat = new THREE.MeshStandardMaterial({ color: 0x272733, roughness: 0.4, metalness: 0.3 });
     const railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.2, metalness: 0.85 });
@@ -344,7 +360,6 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     panel.rotation.x = -0.3;
     proceduralMachine.add(panel);
 
-    // LCD Screen Glow
     const lcdScreen = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.08), new THREE.MeshBasicMaterial({ color: 0x22d3ee }));
     lcdScreen.position.set(1.3, 1.13, 0.85);
     lcdScreen.rotation.x = -0.3;
@@ -352,41 +367,56 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
 
     plotterMainGroup.add(proceduralMachine);
 
-    // B) Load the Official Graphtec FCX2000 GLB Model
+    // B) Load and Setup Animated Parts of the Official Graphtec FCX2000 GLB
     const gltfLoader = new GLTFLoader();
     gltfLoader.load(
       '/models/graphtec_fcx2000.glb',
       (gltf) => {
         const glbModel = gltf.scene;
 
-        // Bounding box measurement and normalized scaling
         const box = new THREE.Box3().setFromObject(glbModel);
         const size = new THREE.Vector3();
         box.getSize(size);
 
-        // Scale model to match standard workshop size (~3.2m width)
+        // Scale model to match standard workshop size (~3.25m width)
         const scaleFactor = 3.25 / (size.x || 178);
+        glbScaleFactorRef.current = scaleFactor;
         glbModel.scale.setScalar(scaleFactor);
 
-        // Center on the floor
         const scaledBox = new THREE.Box3().setFromObject(glbModel);
         glbModel.position.set(0, -scaledBox.min.y, 0);
+
+        // Separate and index individual movable parts of the real GLB model
+        const gMeshes: THREE.Mesh[] = [];
+        const hMeshes: THREE.Mesh[] = [];
+        const pMeshes: THREE.Mesh[] = [];
 
         glbModel.traverse((child) => {
           if ((child as THREE.Mesh).isMesh) {
             child.castShadow = true;
             child.receiveShadow = true;
+            const name = child.name;
+            if (GANTRY_NAMES.has(name)) {
+              gMeshes.push(child as THREE.Mesh);
+            } else if (HEAD_NAMES.has(name)) {
+              hMeshes.push(child as THREE.Mesh);
+            } else if (PEN_NAMES.has(name)) {
+              pMeshes.push(child as THREE.Mesh);
+            }
           }
         });
 
-        // Add the official GLB model to the machine group
+        glbGantryMeshesRef.current = gMeshes;
+        glbHeadMeshesRef.current = hMeshes;
+        glbPenMeshesRef.current = pMeshes;
+        isGlbLoadedRef.current = true;
+
         plotterMainGroup.add(glbModel);
 
-        // Hide procedural stand once the real Graphtec GLB is mounted
+        // Hide procedural stand and procedural gantry once the real GLB is active
         const proc = plotterMainGroup.getObjectByName('proceduralMachine');
-        if (proc) {
-          proc.visible = false;
-        }
+        if (proc) proc.visible = false;
+        if (gantryBeamRef.current) gantryBeamRef.current.visible = false;
       },
       undefined,
       (error) => {
@@ -433,26 +463,18 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
       plotterMainGroup.add(tape);
     });
 
-    // 10. CNC PLOTTER GANTRY & PEN TOOL CARRIAGE (Puente & Cabezal de Dibujo)
-    // The gantry bridge spans across X and travels along Z (forward/backward)
+    // 10. PROCEDURAL CNC GANTRY (Usado como fallback antes de que cargue el GLB)
     const gantryGroup = new THREE.Group();
     gantryGroup.position.set(0, bedHeight + 0.12, 0);
     plotterMainGroup.add(gantryGroup);
     gantryBeamRef.current = gantryGroup;
 
-    // Gantry Extrusion Bridge (Viga de aluminio)
     const beamGeo = new THREE.BoxGeometry(3.0, 0.07, 0.14);
     const beamMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.35, metalness: 0.8 });
     const beam = new THREE.Mesh(beamGeo, beamMat);
     beam.castShadow = true;
     gantryGroup.add(beam);
 
-    // Gantry Guide Rail on the beam
-    const gantryRail = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.02, 0.02), railMat);
-    gantryRail.position.set(0, -0.01, 0.08);
-    gantryGroup.add(gantryRail);
-
-    // End carriages (left and right bearing blocks)
     const endBlockGeo = new THREE.BoxGeometry(0.14, 0.14, 0.28);
     const endBlockMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 });
     const endL = new THREE.Mesh(endBlockGeo, endBlockMat);
@@ -463,45 +485,24 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     endR.position.set(1.42, 0, 0);
     gantryGroup.add(endR);
 
-    // The Tool Carriage (Carro del cabezal que corre a lo largo del eje X de la viga)
     const carriageGroup = new THREE.Group();
     carriageGroup.position.set(0, 0, 0.1);
     gantryGroup.add(carriageGroup);
     toolCarriageRef.current = carriageGroup;
 
-    // CNC Toolhead Body
-    const toolBodyGeo = new THREE.BoxGeometry(0.2, 0.16, 0.16);
-    const toolBodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.7 });
-    const toolBody = new THREE.Mesh(toolBodyGeo, toolBodyMat);
+    const toolBody = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.16, 0.16), new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.7 }));
     toolBody.castShadow = true;
     carriageGroup.add(toolBody);
 
-    // Stepper Motor Cylinder on top of carriage
-    const stepperMotor = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.045, 0.045, 0.1, 16),
-      new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.9, roughness: 0.2 })
-    );
-    stepperMotor.position.set(0, 0.12, 0);
-    carriageGroup.add(stepperMotor);
-
-    // The Vertical Pen Actuator & Stylus (Pluma/Cuchilla de trazo)
     const penAssembly = new THREE.Group();
     carriageGroup.add(penAssembly);
     penMeshRef.current = penAssembly;
 
-    // Pen Tool Holder Clamp
-    const clampMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.022, 0.022, 0.14, 12),
-      new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8, roughness: 0.2 })
-    );
+    const clampMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.14, 12), new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8, roughness: 0.2 }));
     clampMesh.position.set(0, -0.06, 0.06);
     penAssembly.add(clampMesh);
 
-    // Drafting Pen / Stylus Nib
-    const penNib = new THREE.Mesh(
-      new THREE.ConeGeometry(0.009, 0.08, 12),
-      new THREE.MeshBasicMaterial({ color: 0x22c55e })
-    );
+    const penNib = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.08, 12), new THREE.MeshBasicMaterial({ color: 0x22c55e }));
     penNib.position.set(0, -0.14, 0.06);
     penNib.rotation.x = Math.PI;
     penAssembly.add(penNib);
@@ -512,13 +513,13 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
     penAssembly.add(penLight);
     penTipLightRef.current = penLight;
 
-    // Red Laser Targeting Crosshair Beam on the paper
+    // Red Laser Targeting Crosshair Beam on the paper (SIEMPRE ACTIVO)
     const laserGeo = new THREE.RingGeometry(0.015, 0.022, 16);
-    const laserMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+    const laserMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
     const laserCrosshair = new THREE.Mesh(laserGeo, laserMat);
     laserCrosshair.rotation.x = -Math.PI / 2;
-    laserCrosshair.position.set(0, -0.15 + (bedHeight - (bedHeight + 0.12)) + 0.01, 0.06);
-    carriageGroup.add(laserCrosshair);
+    laserCrosshair.position.set(0, bedHeight + 0.006, 0);
+    plotterMainGroup.add(laserCrosshair);
     laserCrosshairRef.current = laserCrosshair;
 
     // 11. Spark Particles System for Plotting
@@ -616,7 +617,7 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
       });
 
       // UPDATE PLOTTER CNC GANTRY & CARRIAGE
-      if (sessionRef.current && textureRef.current && gantryBeamRef.current && toolCarriageRef.current) {
+      if (sessionRef.current && textureRef.current) {
         const session = sessionRef.current;
 
         // Render progressive canvas frame
@@ -638,43 +639,77 @@ export const HalloweenScene3D: React.FC<HalloweenScene3DProps> = ({
         const targetX = (quillX - 0.5) * paperWidth;
         const targetZ = (quillY - 0.5) * paperHeight;
 
-        // Smooth CNC servo interpolation
-        const gantry = gantryBeamRef.current;
-        const carriage = toolCarriageRef.current;
+        // A) ANIMATE ACTUAL PIECES OF THE GRAPHTEC GLB MODEL
+        if (isGlbLoadedRef.current) {
+          const scale = glbScaleFactorRef.current || 0.01825;
+          // In local coordinate space:
+          // X: Bridge rest is at X = 25.6
+          // Y: Head rest is at Y = -28.5 (world Z maps to local -Y)
+          // Z: Pen rest is at Z = 101.8 (pen lift = +2.5 cm)
+          const targetDeltaX = (targetX / scale) - 25.6;
+          const targetDeltaY = (-targetZ / scale) + 28.5;
+          const targetDeltaZ = (isDrawing ? 0 : 2.5);
 
-        gantry.position.z += (targetZ - gantry.position.z) * 0.22;
-        carriage.position.x += (targetX - carriage.position.x) * 0.22;
+          // 1. Gantry Bridge Meshes (Object_2, Object_12, Object_23)
+          glbGantryMeshesRef.current.forEach((m) => {
+            m.position.x += (targetDeltaX - m.position.x) * 0.22;
+          });
 
-        // Vertical Pen Lift Mechanism:
-        // Down (touching paper) when drawing; Up (lifted 12mm) when traveling
-        if (penMeshRef.current) {
-          const targetPenY = isDrawing ? 0 : 0.02;
-          penMeshRef.current.position.y += (targetPenY - penMeshRef.current.position.y) * 0.3;
+          // 2. Tool Head Carriage Meshes (Object_13..47)
+          glbHeadMeshesRef.current.forEach((m) => {
+            m.position.x += (targetDeltaX - m.position.x) * 0.22;
+            m.position.y += (targetDeltaY - m.position.y) * 0.22;
+          });
+
+          // 3. Pen Plunger Meshes (Object_48..51)
+          glbPenMeshesRef.current.forEach((m) => {
+            m.position.x += (targetDeltaX - m.position.x) * 0.22;
+            m.position.y += (targetDeltaY - m.position.y) * 0.22;
+            m.position.z += (targetDeltaZ - m.position.z) * 0.35;
+          });
+        } else if (gantryBeamRef.current && toolCarriageRef.current) {
+          // Fallback procedural gantry animation
+          const gantry = gantryBeamRef.current;
+          const carriage = toolCarriageRef.current;
+          gantry.position.z += (targetZ - gantry.position.z) * 0.22;
+          carriage.position.x += (targetX - carriage.position.x) * 0.22;
+          if (penMeshRef.current) {
+            const targetPenY = isDrawing ? 0 : 0.02;
+            penMeshRef.current.position.y += (targetPenY - penMeshRef.current.position.y) * 0.3;
+          }
         }
 
-        // Laser Guide Crosshair pulses gently
+        // Red Laser Targeting Crosshair Beam on the paper
         if (laserCrosshairRef.current) {
+          laserCrosshairRef.current.position.x += (targetX - laserCrosshairRef.current.position.x) * 0.22;
+          laserCrosshairRef.current.position.z += (targetZ - laserCrosshairRef.current.position.z) * 0.22;
           laserCrosshairRef.current.scale.setScalar(1.0 + Math.sin(elapsed * 15) * 0.15);
         }
 
         // Color update according to gift tier
         if (penTipLightRef.current) {
+          penTipLightRef.current.position.set(targetX, bedHeight + 0.04, targetZ);
           penTipLightRef.current.color.setHex(session.tierConfig.particleColor);
         }
 
         // Emit plotter sparks at the pen tip
         if (isDrawing && sparkPositionsRef.current && sparkGeoRef.current) {
           const spPos = sparkPositionsRef.current;
-          spPos[sparkIndex * 3] = carriage.position.x + (Math.random() - 0.5) * 0.03;
+          spPos[sparkIndex * 3] = targetX + (Math.random() - 0.5) * 0.03;
           spPos[sparkIndex * 3 + 1] = bedHeight + 0.008;
-          spPos[sparkIndex * 3 + 2] = gantry.position.z + 0.06 + (Math.random() - 0.5) * 0.03;
+          spPos[sparkIndex * 3 + 2] = targetZ + (Math.random() - 0.5) * 0.03;
           sparkIndex = (sparkIndex + 1) % sparkCount;
           sparkGeoRef.current.attributes.position.needsUpdate = true;
         }
-      } else if (gantryBeamRef.current && toolCarriageRef.current) {
-        // Idle gentle breathing park position
-        gantryBeamRef.current.position.z += (Math.sin(elapsed * 0.8) * 0.2 - gantryBeamRef.current.position.z) * 0.05;
-        toolCarriageRef.current.position.x += (Math.cos(elapsed * 1.0) * 0.3 - toolCarriageRef.current.position.x) * 0.05;
+      } else if (isGlbLoadedRef.current) {
+        // Idle gentle park breathing
+        const idleX = Math.sin(elapsed * 0.6) * 15;
+        const idleY = Math.cos(elapsed * 0.8) * 12;
+        glbGantryMeshesRef.current.forEach((m) => { m.position.x += (idleX - m.position.x) * 0.05; });
+        glbHeadMeshesRef.current.forEach((m) => {
+          m.position.x += (idleX - m.position.x) * 0.05;
+          m.position.y += (idleY - m.position.y) * 0.05;
+        });
       }
 
       // CAMERA POSITIONING ACCORDING TO PLOTTER MODES
